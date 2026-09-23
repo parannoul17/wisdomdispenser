@@ -1,0 +1,73 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Combo Solver</title>
+<link rel="stylesheet" href="style.css" />
+</head>
+<body>
+<div class="app">
+  <h1>Combo Solver</h1>
+  <p class="subtitle">Finds the guess that narrows down the secret combination fastest. Values 1&ndash;10, repeats allowed, feedback is % of digits in the exact right position.</p>
+
+  <div id="setup-panel" class="panel">
+    <p class="section-label">Combination length</p>
+    <div class="length-choices">
+      <button id="len-3-btn" class="btn-primary">3 numbers</button>
+      <button id="len-4-btn" class="btn-primary">4 numbers</button>
+    </div>
+
+    <p class="section-label" style="margin-top:22px">Number inventory (optional)</p>
+    <p class="guess-hint" style="margin:0 0 10px">How many of each number you can send this session &mdash; e.g. ten 1s, three 2s. Leave a box blank for unlimited.</p>
+    <div id="inventory-setup-grid" class="inventory-grid"></div>
+  </div>
+
+  <div id="game-panel" class="hidden">
+    <div class="top-bar">
+      <div class="remaining">Possible combinations left: <strong id="remaining-count">-</strong></div>
+      <button id="reset-btn">New session</button>
+    </div>
+
+    <div id="banner-area"></div>
+
+    <div class="panel">
+      <p class="section-label">Cards</p>
+      <div id="cards-display" class="cards-display"></div>
+    </div>
+
+    <div class="panel">
+      <p class="section-label">Number inventory remaining</p>
+      <div id="inventory-display" class="inventory-display"></div>
+    </div>
+
+    <div class="panel">
+      <p class="section-label">Suggested guess (edit if you tried something else)</p>
+      <div id="guess-row" class="guess-row"></div>
+      <p class="guess-hint">Enter this in the game, then tap the result you got below. Set a slot to &ldquo;&mdash;&rdquo; to skip sending a card there &mdash; costs less but tells you less.</p>
+      <p id="guess-cost" class="guess-hint"></p>
+      <p id="guess-error" class="field-error hidden"></p>
+    </div>
+
+    <div class="panel">
+      <p class="section-label">Result you got</p>
+      <div id="spinner-row" class="spinner-row hidden">
+        <div class="spinner"></div>
+        <span>Calculating best guess&hellip;</span>
+      </div>
+      <div id="result-buttons" class="result-buttons"></div>
+    </div>
+
+    <div class="panel">
+      <div class="footer-row">
+        <p class="section-label" style="margin:0">History</p>
+        <button id="undo-btn" disabled>Undo last</button>
+      </div>
+      <div id="history-area"></div>
+    </div>
+  </div>
+</div>
+
+<script type="module" src="app.js"></script>
+</body>
+</html>
