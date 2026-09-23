@@ -2,7 +2,7 @@ import {
   buildDigits, codeToValues, allCodes, digitCounts, feasibleCodes, matchCountValues,
   buildUnifiedDigits, allUnifiedCandidates, trueLengthOf, unifiedIdToValues,
   matchCountValuesUnified, feasibleGuessCodes, guessCodeToValues, percentFor,
-} from './lib.js?v=2';
+} from './lib.js?v=3';
 
 const setupPanel = document.getElementById('setup-panel');
 const gamePanel = document.getElementById('game-panel');
@@ -18,6 +18,9 @@ const undoBtn = document.getElementById('undo-btn');
 const resetBtn = document.getElementById('reset-btn');
 const inventorySetupGrid = document.getElementById('inventory-setup-grid');
 const inventoryDisplay = document.getElementById('inventory-display');
+const inventoryAddGrid = document.getElementById('inventory-add-grid');
+const inventoryAddBtn = document.getElementById('inventory-add-btn');
+const sendCountChoices = document.getElementById('send-count-choices');
 const cardsDisplay = document.getElementById('cards-display');
 
 let lengthMode = 'fixed'; // 'fixed' | 'unified' (unified = "not sure, 3 or 4")
@@ -33,6 +36,7 @@ let outOfResources = false; // truly nothing left to send at all
 let fullGuessUnaffordable = false; // fixed mode only: can't afford a full-length guess, but a partial one may still work
 let computeError = null;
 let computeTimeoutId = null;
+let sendCount = 1; // how many leading cards of the guess row are active (a prefix, never a gap)
 const COMPUTE_TIMEOUT_MS = 15000;
 
 // { status: 'idle'|'computing'|'done'|'unavailable', mode, worstDepth/expected (fixed) or worstCards/expectedCards (unified), capped }
@@ -55,7 +59,7 @@ function openingAnalysisCacheKey(mode, len, inv) {
 
 function getWorker() {
   if (worker) return worker;
-  worker = new Worker('worker.js?v=2');
+  worker = new Worker('worker.js?v=3');
   worker.onerror = (err) => {
     console.error('Solver worker error:', err.message || err);
     clearTimeout(computeTimeoutId);
@@ -71,7 +75,7 @@ function getWorker() {
 
 function getAnalysisWorker() {
   if (analysisWorker) return analysisWorker;
-  analysisWorker = new Worker('worker.js?v=2');
+  analysisWorker = new Worker('worker.js?v=3');
   analysisWorker.onerror = (err) => {
     console.error('Analysis worker error:', err.message || err);
     clearTimeout(analysisTimeoutId);
@@ -112,6 +116,60 @@ function readInventoryInputs() {
   return inv;
 }
 
+function buildInventoryAddGrid() {
+  inventoryAddGrid.innerHTML = '';
+  for (let v = 1; v <= 10; v++) {
+    const field = document.createElement('div');
+    field.className = 'inventory-field';
+    const label = document.createElement('label');
+    label.textContent = String(v);
+    label.htmlFor = `add-inv-${v}`;
+    const input = document.createElement('input');
+    input.type = 'number';
+    input.min = '0';
+    input.placeholder = '0';
+    input.id = `add-inv-${v}`;
+    field.appendChild(label);
+    field.appendChild(input);
+    inventoryAddGrid.appendChild(field);
+  }
+}
+
+function addToInventory() {
+  let changed = false;
+  for (let v = 1; v <= 10; v++) {
+    const input = document.getElementById(`add-inv-${v}`);
+    const raw = input.value.trim();
+    const amount = raw === '' ? 0 : Math.max(0, parseInt(raw, 10) || 0);
+    if (amount > 0) {
+      inventory[v - 1] = inventory[v - 1] === Infinity ? Infinity : inventory[v - 1] + amount;
+      changed = true;
+    }
+    input.value = '';
+  }
+  if (!changed) return;
+  if (candidateCodes.length > 1) {
+    requestSuggestion();
+  } else {
+    renderAll();
+  }
+}
+
+// Length of the guess's own leading run of real values — a suggestion is
+// always shaped as a prefix (fixed-mode guesses are always full-length;
+// unified-mode guesses are generated as prefixes only), so this is just
+// "how many cards did the suggestion itself use."
+function naturalSendCount(sug) {
+  if (sug === null) return 1;
+  const vals = lengthMode === 'unified' ? guessCodeToValues(sug) : codeToValues(sug, L);
+  let count = 0;
+  for (const v of vals) {
+    if (v === null) break;
+    count++;
+  }
+  return Math.max(1, count);
+}
+
 function startGame(len) {
   lengthMode = 'fixed';
   L = len;
@@ -120,6 +178,7 @@ function startGame(len) {
   candidateCodes = allCodes(L);
   history = [];
   suggestion = null;
+  sendCount = L;
   outOfResources = false;
   fullGuessUnaffordable = false;
   computeError = null;
@@ -138,6 +197,7 @@ function startUnifiedGame() {
   candidateCodes = allUnifiedCandidates();
   history = [];
   suggestion = null;
+  sendCount = L;
   outOfResources = false;
   fullGuessUnaffordable = false;
   computeError = null;
@@ -221,12 +281,13 @@ function requestAnalysis(candidatesForAnalysis, guessCodesForAnalysis, cacheKey 
 function requestSuggestion() {
   guessError.classList.add('hidden');
 
-  if (candidateCodes.length === 0) { suggestion = null; updateProjectionsTerminal(); renderAll(); return; }
-  if (candidateCodes.length === 1) { suggestion = candidateCodes[0]; updateProjectionsTerminal(); renderAll(); return; }
+  if (candidateCodes.length === 0) { suggestion = null; sendCount = 1; updateProjectionsTerminal(); renderAll(); return; }
+  if (candidateCodes.length === 1) { suggestion = candidateCodes[0]; sendCount = naturalSendCount(suggestion); updateProjectionsTerminal(); renderAll(); return; }
 
   const guessCodes = lengthMode === 'unified' ? feasibleGuessCodes(inventory) : feasibleCodes(inventory, L);
   if (guessCodes.length === 0) {
     suggestion = null;
+    sendCount = 1;
     const totalLeft = inventory.reduce((s, c) => s + c, 0);
     outOfResources = totalLeft === 0;
     fullGuessUnaffordable = lengthMode === 'fixed' && !outOfResources;
@@ -246,6 +307,7 @@ function requestSuggestion() {
 
   if (cacheKey && openingSuggestionCache.has(cacheKey)) {
     suggestion = openingSuggestionCache.get(cacheKey);
+    sendCount = naturalSendCount(suggestion);
     computing = false;
     renderAll();
     requestAnalysis(candidateCodes, guessCodes, cacheKey);
@@ -256,6 +318,7 @@ function requestSuggestion() {
   w.onmessage = (e) => {
     clearTimeout(computeTimeoutId);
     suggestion = e.data.bestGuess;
+    sendCount = naturalSendCount(suggestion);
     if (cacheKey) openingSuggestionCache.set(cacheKey, suggestion);
     computing = false;
     renderAll();
@@ -307,12 +370,14 @@ function submitResult(pct) {
 
   if (candidateCodes.length === 0) {
     suggestion = null;
+    sendCount = 1;
     updateProjectionsTerminal();
     renderAll();
     return;
   }
   if (candidateCodes.length === 1) {
     suggestion = candidateCodes[0];
+    sendCount = naturalSendCount(suggestion);
     updateProjectionsTerminal();
     renderAll();
     return;
@@ -328,6 +393,7 @@ function undoLast() {
   suggestion = null;
   if (candidateCodes.length === 1) {
     suggestion = candidateCodes[0];
+    sendCount = naturalSendCount(suggestion);
     updateProjectionsTerminal();
     renderAll();
   } else {
@@ -338,6 +404,7 @@ function undoLast() {
 function readGuessInputs() {
   const selects = guessRow.querySelectorAll('select');
   return Array.from(selects).map((s) => {
+    if (s.disabled) return null;
     const v = parseInt(s.value, 10);
     return v === 0 ? null : v;
   });
@@ -348,28 +415,49 @@ function onGuessChanged() {
   renderGuessCostPreview();
 }
 
+function renderSendCountControl() {
+  sendCountChoices.innerHTML = '';
+  for (let n = 1; n <= L; n++) {
+    const btn = document.createElement('button');
+    btn.textContent = String(n);
+    btn.className = n === sendCount ? 'send-count-btn active' : 'send-count-btn';
+    btn.addEventListener('click', () => {
+      sendCount = n;
+      renderGuessInputs();
+      renderResultButtons();
+      renderGuessCostPreview();
+    });
+    sendCountChoices.appendChild(btn);
+  }
+}
+
 function renderGuessInputs() {
   guessRow.innerHTML = '';
   // No suggestion (e.g. a full-length guess isn't affordable) means there's
-  // no recommendation to show — default to blank so the choice is deliberate.
+  // no recommendation to show — default filler so the choice is deliberate.
   const values = suggestion !== null
     ? (lengthMode === 'unified' ? guessCodeToValues(suggestion) : codeToValues(suggestion, L))
     : new Array(L).fill(null);
   for (let i = 0; i < L; i++) {
     const select = document.createElement('select');
-    const blankOpt = document.createElement('option');
-    blankOpt.value = '0';
-    blankOpt.textContent = '—';
-    if (values[i] === null) blankOpt.selected = true;
-    select.appendChild(blankOpt);
-    for (let v = 1; v <= 10; v++) {
+    if (i >= sendCount) {
       const opt = document.createElement('option');
-      opt.value = String(v);
-      opt.textContent = String(v);
-      if (v === values[i]) opt.selected = true;
+      opt.value = '0';
+      opt.textContent = '—';
+      opt.selected = true;
       select.appendChild(opt);
+      select.disabled = true;
+    } else {
+      const defaultVal = values[i] !== null && values[i] !== undefined ? values[i] : 1;
+      for (let v = 1; v <= 10; v++) {
+        const opt = document.createElement('option');
+        opt.value = String(v);
+        opt.textContent = String(v);
+        if (v === defaultVal) opt.selected = true;
+        select.appendChild(opt);
+      }
+      select.addEventListener('change', onGuessChanged);
     }
-    select.addEventListener('change', onGuessChanged);
     guessRow.appendChild(select);
   }
 }
@@ -488,7 +576,7 @@ function renderBanner() {
   } else if (outOfResources) {
     bannerArea.innerHTML = `<div class="banner error">You're out of numbers to send &mdash; no guess is possible. Use "Undo last" if that's wrong.</div>`;
   } else if (fullGuessUnaffordable) {
-    bannerArea.innerHTML = `<div class="banner error">Not enough of any one combination left for a full ${L}-number guess. You can still send fewer numbers &mdash; set some slots to &ldquo;&mdash;&rdquo; below and use what you have left.</div>`;
+    bannerArea.innerHTML = `<div class="banner error">Not enough of any one combination left for a full ${L}-number guess. You can still send fewer &mdash; use the "Cards to send" buttons below and pick what you have left.</div>`;
   } else if (computeError) {
     bannerArea.innerHTML = '';
     const div = document.createElement('div');
@@ -508,6 +596,7 @@ function renderAll() {
   remainingCountEl.textContent = candidateCodes.length.toLocaleString('en-US');
   spinnerRow.classList.toggle('hidden', !computing);
   renderInventory();
+  renderSendCountControl();
   renderGuessInputs();
   renderResultButtons();
   renderGuessCostPreview();
@@ -524,8 +613,10 @@ function renderAll() {
 }
 
 buildInventorySetupGrid();
+buildInventoryAddGrid();
 document.getElementById('len-3-btn').addEventListener('click', () => startGame(3));
 document.getElementById('len-4-btn').addEventListener('click', () => startGame(4));
 document.getElementById('len-unknown-btn').addEventListener('click', () => startUnifiedGame());
 resetBtn.addEventListener('click', resetGame);
 undoBtn.addEventListener('click', undoLast);
+inventoryAddBtn.addEventListener('click', addToInventory);

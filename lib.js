@@ -200,25 +200,30 @@ export function guessCardCost(code) {
   return cost;
 }
 
-// All non-empty guess codes (11^4 - 1, excluding "send nothing") whose
-// digit usage fits within `inventory`.
+// All PREFIX-shaped guess codes (cards 1..k filled, k+1..4 always blank, for
+// k=1..4 — never a gap in the middle or a suffix-only guess) whose digit
+// usage fits within `inventory`. This matches how partial guesses actually
+// work in the game: you can only hold back cards from the end.
 export function feasibleGuessCodes(inventory) {
-  const total = Math.pow(11, 4);
   const result = [];
   const used = new Array(10);
-  for (let code = 1; code < total; code++) {
-    used.fill(0);
-    let rem = code;
-    let ok = true;
-    for (let p = 3; p >= 0; p--) {
-      const v = rem % 11;
-      rem = Math.floor(rem / 11);
-      if (v !== 0) {
+  const values = new Array(4).fill(null);
+  for (let k = 1; k <= 4; k++) {
+    const total = Math.pow(10, k);
+    for (let combo = 0; combo < total; combo++) {
+      used.fill(0);
+      let rem = combo;
+      let ok = true;
+      for (let p = k - 1; p >= 0; p--) {
+        const v = (rem % 10) + 1;
+        rem = Math.floor(rem / 10);
+        values[p] = v;
         used[v - 1]++;
         if (used[v - 1] > inventory[v - 1]) { ok = false; break; }
       }
+      for (let p = k; p < 4; p++) values[p] = null;
+      if (ok) result.push(valuesToGuessCode(values));
     }
-    if (ok) result.push(code);
   }
   return result;
 }

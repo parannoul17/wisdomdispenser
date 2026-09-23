@@ -313,6 +313,39 @@ th {
   margin: 8px 0 0;
 }
 
+.inventory-add {
+  margin-top: 12px;
+}
+
+.inventory-add summary {
+  cursor: pointer;
+  user-select: none;
+}
+
+.inventory-add .inventory-grid {
+  margin-top: 10px;
+}
+
+.send-count-choices {
+  display: flex;
+  gap: 8px;
+}
+
+.send-count-btn {
+  min-width: 44px;
+}
+
+.send-count-btn.active {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: white;
+  font-weight: 600;
+}
+
+.guess-row select:disabled {
+  opacity: 0.4;
+}
+
 .cards-display {
   display: flex;
   flex-wrap: wrap;
