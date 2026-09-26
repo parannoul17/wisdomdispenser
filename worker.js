@@ -91,8 +91,15 @@ function partitionByGuess(candidateCodes, guessCode, digits, L) {
 // level does a roughly constant amount of total work.
 const DEPTH_CAP = 25;
 
-function analyzeTree(candidateCodes, guessCodes, digits, L, depth) {
-  if (candidateCodes.length <= 1) return { worstDepth: 0, expected: 0, capped: false };
+// Reaching a single remaining candidate isn't the end: the game still wants
+// that answer submitted, which costs one more full guess — unless the guess
+// that just got us here was itself the answer (a 100% result), in which case
+// it's already been sent.
+function analyzeTree(candidateCodes, guessCodes, digits, L, depth, isHit) {
+  if (candidateCodes.length <= 1) {
+    const finalGuess = isHit ? 0 : 1;
+    return { worstDepth: finalGuess, expected: finalGuess, capped: false };
+  }
   if (depth >= DEPTH_CAP) return { worstDepth: 0, expected: 0, capped: true };
 
   const { bestGuess } = findBestGuess(candidateCodes, guessCodes, digits, L);
@@ -102,9 +109,10 @@ function analyzeTree(candidateCodes, guessCodes, digits, L, depth) {
   let worstDepth = 0;
   let expected = 0;
   let capped = false;
-  for (const b of buckets) {
+  for (let k = 0; k < buckets.length; k++) {
+    const b = buckets[k];
     if (b.length === 0) continue; // an outcome with zero candidates can't actually happen
-    const sub = analyzeTree(b, guessCodes, digits, L, depth + 1);
+    const sub = analyzeTree(b, guessCodes, digits, L, depth + 1, k === L);
     const branchDepth = 1 + sub.worstDepth;
     if (branchDepth > worstDepth) worstDepth = branchDepth;
     expected += (b.length / n) * (1 + sub.expected);
@@ -231,7 +239,12 @@ function guessCardCost(code) {
 // Same idea as analyzeTree, but tracks actual CARDS spent along each path
 // (not guess count), since guess cost varies here.
 function analyzeTreeUnified(candidateIds, guessCodes, unifiedDigits, depth) {
-  if (candidateIds.length <= 1) return { worstCards: 0, expectedCards: 0, capped: false };
+  if (candidateIds.length === 0) return { worstCards: 0, expectedCards: 0, capped: false };
+  if (candidateIds.length === 1) {
+    // Single answer left: sending it costs its true length in cards.
+    const finalCost = candidateIds[0] < UNIFIED_N3 ? 3 : 4;
+    return { worstCards: finalCost, expectedCards: finalCost, capped: false };
+  }
   if (depth >= UNIFIED_DEPTH_CAP) return { worstCards: 0, expectedCards: 0, capped: true };
 
   const { bestGuess } = findBestGuessUnified(candidateIds, guessCodes, unifiedDigits);
@@ -240,9 +253,13 @@ function analyzeTreeUnified(candidateIds, guessCodes, unifiedDigits, depth) {
   const n = candidateIds.length;
 
   let worstCards = 0, expectedCards = 0, capped = false;
-  for (const b of buckets) {
+  for (let pct = 0; pct < buckets.length; pct++) {
+    const b = buckets[pct];
     if (!b || b.length === 0) continue;
-    const sub = analyzeTreeUnified(b, guessCodes, unifiedDigits, depth + 1);
+    // 100% means the game accepted it — that guess was the answer, already paid for.
+    const sub = pct === 100
+      ? { worstCards: 0, expectedCards: 0, capped: false }
+      : analyzeTreeUnified(b, guessCodes, unifiedDigits, depth + 1);
     const branchCards = cost + sub.worstCards;
     if (branchCards > worstCards) worstCards = branchCards;
     expectedCards += (b.length / n) * (cost + sub.expectedCards);
@@ -269,7 +286,7 @@ self.onmessage = (e) => {
   const digits = buildDigits(L);
 
   if (type === 'analysis') {
-    const { worstDepth, expected, capped } = analyzeTree(candidateCodes, guessCodes, digits, L, 0);
+    const { worstDepth, expected, capped } = analyzeTree(candidateCodes, guessCodes, digits, L, 0, false);
     self.postMessage({ type: 'analysis', requestId, worstDepth, expected, capped });
     return;
   }

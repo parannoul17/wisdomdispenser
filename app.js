@@ -2,7 +2,7 @@ import {
   buildDigits, codeToValues, allCodes, digitCounts, feasibleCodes, matchCountValues,
   buildUnifiedDigits, allUnifiedCandidates, trueLengthOf, unifiedIdToValues,
   matchCountValuesUnified, feasibleGuessCodes, guessCodeToValues, percentFor,
-} from './lib.js?v=3';
+} from './lib.js?v=4';
 
 const setupPanel = document.getElementById('setup-panel');
 const gamePanel = document.getElementById('game-panel');
@@ -59,7 +59,7 @@ function openingAnalysisCacheKey(mode, len, inv) {
 
 function getWorker() {
   if (worker) return worker;
-  worker = new Worker('worker.js?v=3');
+  worker = new Worker('worker.js?v=4');
   worker.onerror = (err) => {
     console.error('Solver worker error:', err.message || err);
     clearTimeout(computeTimeoutId);
@@ -75,7 +75,7 @@ function getWorker() {
 
 function getAnalysisWorker() {
   if (analysisWorker) return analysisWorker;
-  analysisWorker = new Worker('worker.js?v=3');
+  analysisWorker = new Worker('worker.js?v=4');
   analysisWorker.onerror = (err) => {
     console.error('Analysis worker error:', err.message || err);
     clearTimeout(analysisTimeoutId);
@@ -234,9 +234,16 @@ function resetGame() {
 function updateProjectionsTerminal() {
   analysisRequestId++; // invalidate any in-flight analysis request
   if (candidateCodes.length <= 1) {
-    analysisState = lengthMode === 'unified'
-      ? { status: 'done', mode: 'unified', worstCards: 0, expectedCards: 0, capped: false }
-      : { status: 'done', mode: 'fixed', worstDepth: 0, expected: 0, capped: false };
+    // The answer still has to be sent in the game — unless the last guess was
+    // itself the winning one (100%), in which case it's already been paid for.
+    const alreadySent = candidateCodes.length === 0 || (history.length > 0 && history[history.length - 1].result === 100);
+    if (lengthMode === 'unified') {
+      const cards = alreadySent ? 0 : trueLengthOf(candidateCodes[0]);
+      analysisState = { status: 'done', mode: 'unified', worstCards: cards, expectedCards: cards, capped: false };
+    } else {
+      const guesses = alreadySent ? 0 : 1;
+      analysisState = { status: 'done', mode: 'fixed', worstDepth: guesses, expected: guesses, capped: false };
+    }
   } else {
     analysisState = { status: 'unavailable' };
   }
@@ -553,8 +560,7 @@ function renderCards() {
         predictedHtml = `${used + Math.round(analysisState.expectedCards)}${suffix}`;
         worstHtml = `${used + analysisState.worstCards}${suffix}`;
       } else {
-        const expectedGuesses = Math.round(analysisState.expected);
-        predictedHtml = `${used + expectedGuesses * L}${suffix}`;
+        predictedHtml = `${used + Math.round(analysisState.expected * L)}${suffix}`;
         worstHtml = `${used + analysisState.worstDepth * L}${suffix}`;
       }
     }
@@ -572,7 +578,9 @@ function renderBanner() {
     bannerArea.innerHTML = `<div class="banner error">No combination matches all the results entered so far &mdash; one of the results was probably mis-entered. Use "Undo last" to fix it.</div>`;
   } else if (candidateCodes.length === 1 && suggestion !== null) {
     const values = lengthMode === 'unified' ? unifiedIdToValues(suggestion, digits) : codeToValues(suggestion, L);
-    bannerArea.innerHTML = `<div class="banner win">Solved! The combination is <strong>${values.join(', ')}</strong>.</div>`;
+    const sent = history.length > 0 && history[history.length - 1].result === 100;
+    const tail = sent ? '' : ` Send it in the game to finish (${values.length} cards).`;
+    bannerArea.innerHTML = `<div class="banner win">Solved! The combination is <strong>${values.join(', ')}</strong>.${tail}</div>`;
   } else if (outOfResources) {
     bannerArea.innerHTML = `<div class="banner error">You're out of numbers to send &mdash; no guess is possible. Use "Undo last" if that's wrong.</div>`;
   } else if (fullGuessUnaffordable) {
