@@ -1,8 +1,7 @@
 import {
-  buildDigits, codeToValues, allCodes, digitCounts, feasibleCodes, matchCountValues,
-  buildUnifiedDigits, allUnifiedCandidates, trueLengthOf, unifiedIdToValues,
+  digitCounts, buildUnifiedDigits, allUnifiedCandidates, trueLengthOf, unifiedIdToValues,
   matchCountValuesUnified, feasibleGuessCodes, guessCodeToValues, percentFor,
-} from './lib.js?v=5';
+} from './lib.js?v=7';
 
 const setupPanel = document.getElementById('setup-panel');
 const gamePanel = document.getElementById('game-panel');
@@ -25,8 +24,8 @@ const sendCountHint = document.getElementById('send-count-hint');
 const guessLabel = document.getElementById('guess-label');
 const cardsDisplay = document.getElementById('cards-display');
 
-let lengthMode = 'fixed'; // 'fixed' | 'unified' (unified = "not sure, 3 or 4")
-let L = null;
+let fixedLen = null; // 3 or 4 when the length is known, null for "not sure"
+let L = null; // number of card slots shown (4 when the length is unknown)
 let digits = null;
 let candidateCodes = [];
 let history = []; // { guessValues, result (a percent), before, invBefore, remainingAfter, cardsUsed }
@@ -35,33 +34,31 @@ let computing = false;
 let worker = null;
 let inventory = null; // array of 10 remaining counts (index 0 = value 1), Infinity = unlimited
 let outOfResources = false; // truly nothing left to send at all
-let fullGuessUnaffordable = false; // fixed mode only: can't afford a full-length guess, but a partial one may still work
 let computeError = null;
 let computeTimeoutId = null;
 let sendCount = 1; // how many leading cards of the guess row are active (a prefix, never a gap)
 const COMPUTE_TIMEOUT_MS = 15000;
 
-// { status: 'idle'|'computing'|'done'|'unavailable', mode, worstDepth/expected (fixed) or worstCards/expectedCards (unified), capped }
+// { status: 'idle'|'computing'|'done'|'unavailable', worstCards, expectedCards, capped }
 let analysisState = { status: 'idle' };
 let analysisWorker = null;
 let analysisRequestId = 0;
 let analysisTimeoutId = null;
 const ANALYSIS_TIMEOUT_MS = 120000;
 
-// The opening move's analysis only depends on (mode, L, inventory) — it's
+// The opening move's analysis only depends on (length, inventory) — it's
 // the same search every time, so a fresh session with the same setup can
-// reuse a previous result instantly instead of re-running the multi-second
-// (or, in unified mode, potentially much longer) full-tree search.
+// reuse a previous result instantly instead of re-running the full-tree search.
 const openingAnalysisCache = new Map();
 const openingSuggestionCache = new Map();
-function openingAnalysisCacheKey(mode, len, inv) {
-  const prefix = mode === 'unified' ? 'unified' : String(len);
+function openingAnalysisCacheKey(len, inv) {
+  const prefix = len === null ? 'unknown' : String(len);
   return prefix + '|' + inv.map((v) => (v === Infinity ? 'inf' : v)).join(',');
 }
 
 function getWorker() {
   if (worker) return worker;
-  worker = new Worker('worker.js?v=5');
+  worker = new Worker('worker.js?v=7');
   worker.onerror = (err) => {
     console.error('Solver worker error:', err.message || err);
     clearTimeout(computeTimeoutId);
@@ -77,7 +74,7 @@ function getWorker() {
 
 function getAnalysisWorker() {
   if (analysisWorker) return analysisWorker;
-  analysisWorker = new Worker('worker.js?v=5');
+  analysisWorker = new Worker('worker.js?v=7');
   analysisWorker.onerror = (err) => {
     console.error('Analysis worker error:', err.message || err);
     clearTimeout(analysisTimeoutId);
@@ -168,15 +165,14 @@ function solvedPendingSend() {
   return candidateCodes.length === 1 && !answerSent();
 }
 
-// Length of the guess's own leading run of real values — a suggestion is
-// always shaped as a prefix (fixed-mode guesses are always full-length;
-// unified-mode guesses are generated as prefixes only), so this is just
-// "how many cards did the suggestion itself use."
+// Length of the guess's own leading run of real values — guesses are always
+// generated as prefixes, so this is just "how many cards did the suggestion
+// itself use."
 function naturalSendCount(sug) {
   if (sug === null) return 1;
   // One candidate left: the "guess" is the answer itself, sent at its full length.
-  if (candidateCodes.length === 1) return lengthMode === 'unified' ? trueLengthOf(sug) : L;
-  const vals = lengthMode === 'unified' ? guessCodeToValues(sug) : codeToValues(sug, L);
+  if (candidateCodes.length === 1) return trueLengthOf(sug);
+  const vals = guessCodeToValues(sug);
   let count = 0;
   for (const v of vals) {
     if (v === null) break;
@@ -185,36 +181,19 @@ function naturalSendCount(sug) {
   return Math.max(1, count);
 }
 
+// Every mode runs on the same engine: the secret is one of the unified
+// candidates, and a known length (3 or 4) just restricts which ones are alive.
+// `len` is 3, 4, or null for "not sure".
 function startGame(len) {
-  lengthMode = 'fixed';
-  L = len;
-  inventory = readInventoryInputs();
-  digits = buildDigits(L);
-  candidateCodes = allCodes(L);
-  history = [];
-  suggestion = null;
-  sendCount = L;
-  outOfResources = false;
-  fullGuessUnaffordable = false;
-  computeError = null;
-  analysisState = { status: 'idle' };
-  setupPanel.classList.add('hidden');
-  gamePanel.classList.remove('hidden');
-  renderAll();
-  requestSuggestion();
-}
-
-function startUnifiedGame() {
-  lengthMode = 'unified';
-  L = 4;
+  fixedLen = len;
+  L = len === null ? 4 : len;
   inventory = readInventoryInputs();
   digits = buildUnifiedDigits();
-  candidateCodes = allUnifiedCandidates();
+  candidateCodes = len === null ? allUnifiedCandidates() : allUnifiedCandidates().filter((id) => trueLengthOf(id) === len);
   history = [];
   suggestion = null;
   sendCount = L;
   outOfResources = false;
-  fullGuessUnaffordable = false;
   computeError = null;
   analysisState = { status: 'idle' };
   setupPanel.classList.add('hidden');
@@ -224,14 +203,13 @@ function startUnifiedGame() {
 }
 
 function resetGame() {
-  lengthMode = 'fixed';
+  fixedLen = null;
   L = null;
   candidateCodes = [];
   history = [];
   suggestion = null;
   inventory = null;
   outOfResources = false;
-  fullGuessUnaffordable = false;
   computeError = null;
   analysisState = { status: 'idle' };
   analysisRequestId++;
@@ -249,16 +227,9 @@ function resetGame() {
 function updateProjectionsTerminal() {
   analysisRequestId++; // invalidate any in-flight analysis request
   if (candidateCodes.length <= 1) {
-    // The answer still has to be sent in the game — unless the last guess was
-    // itself the winning one (100%), in which case it's already been paid for.
-    const alreadySent = candidateCodes.length === 0 || answerSent();
-    if (lengthMode === 'unified') {
-      const cards = alreadySent ? 0 : trueLengthOf(candidateCodes[0]);
-      analysisState = { status: 'done', mode: 'unified', worstCards: cards, expectedCards: cards, capped: false };
-    } else {
-      const guesses = alreadySent ? 0 : 1;
-      analysisState = { status: 'done', mode: 'fixed', worstDepth: guesses, expected: guesses, capped: false };
-    }
+    // Nothing more to find out. (The answer's own cards, if not sent yet, are
+    // already counted in "used" — see renderCards.)
+    analysisState = { status: 'done', worstCards: 0, expectedCards: 0, capped: false };
   } else {
     analysisState = { status: 'unavailable' };
   }
@@ -266,7 +237,7 @@ function updateProjectionsTerminal() {
 
 function requestAnalysis(candidatesForAnalysis, guessCodesForAnalysis, cacheKey = null) {
   if (cacheKey && openingAnalysisCache.has(cacheKey)) {
-    analysisState = { status: 'done', mode: lengthMode, ...openingAnalysisCache.get(cacheKey) };
+    analysisState = { status: 'done', ...openingAnalysisCache.get(cacheKey) };
     renderCards();
     return;
   }
@@ -280,14 +251,12 @@ function requestAnalysis(candidatesForAnalysis, guessCodesForAnalysis, cacheKey 
   aw.onmessage = (e) => {
     if (e.data.requestId !== myId) return;
     clearTimeout(analysisTimeoutId);
-    const result = lengthMode === 'unified'
-      ? { worstCards: e.data.worstCards, expectedCards: e.data.expectedCards, capped: e.data.capped }
-      : { worstDepth: e.data.worstDepth, expected: e.data.expected, capped: e.data.capped };
+    const result = { worstCards: e.data.worstCards, expectedCards: e.data.expectedCards, capped: e.data.capped };
     if (cacheKey) openingAnalysisCache.set(cacheKey, result);
-    analysisState = { status: 'done', mode: lengthMode, ...result };
+    analysisState = { status: 'done', ...result };
     renderCards();
   };
-  aw.postMessage({ type: 'analysis', mode: lengthMode, requestId: myId, candidateCodes: candidatesForAnalysis, guessCodes: guessCodesForAnalysis, L });
+  aw.postMessage({ type: 'analysis', requestId: myId, candidateCodes: candidatesForAnalysis, guessCodes: guessCodesForAnalysis });
 
   clearTimeout(analysisTimeoutId);
   analysisTimeoutId = setTimeout(() => {
@@ -306,26 +275,26 @@ function requestSuggestion() {
   if (candidateCodes.length === 0) { suggestion = null; sendCount = 1; updateProjectionsTerminal(); renderAll(); return; }
   if (candidateCodes.length === 1) { suggestion = candidateCodes[0]; sendCount = naturalSendCount(suggestion); updateProjectionsTerminal(); renderAll(); return; }
 
-  const guessCodes = lengthMode === 'unified' ? feasibleGuessCodes(inventory) : feasibleCodes(inventory, L);
+  // Guesses are prefixes of up to L cards (never longer than the secret can be).
+  // Any card at all makes a 1-card guess affordable, so this is only empty when
+  // there is nothing left to send.
+  const guessCodes = feasibleGuessCodes(inventory, L);
   if (guessCodes.length === 0) {
     suggestion = null;
     sendCount = 1;
-    const totalLeft = inventory.reduce((s, c) => s + c, 0);
-    outOfResources = totalLeft === 0;
-    fullGuessUnaffordable = lengthMode === 'fixed' && !outOfResources;
+    outOfResources = true;
     updateProjectionsTerminal();
     renderAll();
     return;
   }
   outOfResources = false;
-  fullGuessUnaffordable = false;
 
   computing = true;
   computeError = null;
   renderAll();
 
   const isOpeningMove = history.length === 0;
-  const cacheKey = isOpeningMove ? openingAnalysisCacheKey(lengthMode, L, inventory) : null;
+  const cacheKey = isOpeningMove ? openingAnalysisCacheKey(fixedLen, inventory) : null;
 
   if (cacheKey && openingSuggestionCache.has(cacheKey)) {
     suggestion = openingSuggestionCache.get(cacheKey);
@@ -346,7 +315,7 @@ function requestSuggestion() {
     renderAll();
     requestAnalysis(candidateCodes, guessCodes, cacheKey);
   };
-  w.postMessage({ type: 'suggest', mode: lengthMode, candidateCodes, guessCodes, L });
+  w.postMessage({ type: 'suggest', candidateCodes, guessCodes });
 
   clearTimeout(computeTimeoutId);
   computeTimeoutId = setTimeout(() => {
@@ -379,9 +348,7 @@ function submitResult(pct) {
 
   const before = candidateCodes;
   const invBefore = inventory;
-  const after = lengthMode === 'unified'
-    ? before.filter((id) => percentFor(matchCountValuesUnified(guessValues, digits, id), trueLengthOf(id)) === pct)
-    : before.filter((id) => percentFor(matchCountValues(guessValues, digits, L, id), L) === pct);
+  const after = before.filter((id) => percentFor(matchCountValuesUnified(guessValues, digits, id), trueLengthOf(id)) === pct);
 
   const newInventory = inventory.slice();
   for (let v = 1; v <= 10; v++) newInventory[v - 1] -= counts[v - 1];
@@ -455,12 +422,10 @@ function renderSendCountControl() {
 
 function renderGuessInputs() {
   guessRow.innerHTML = '';
-  // No suggestion (e.g. a full-length guess isn't affordable) means there's
-  // no recommendation to show — default filler so the choice is deliberate.
   let values;
   if (suggestion === null) values = new Array(L).fill(null);
-  else if (candidateCodes.length === 1) values = lengthMode === 'unified' ? unifiedIdToValues(suggestion, digits) : codeToValues(suggestion, L);
-  else values = lengthMode === 'unified' ? guessCodeToValues(suggestion) : codeToValues(suggestion, L);
+  else if (candidateCodes.length === 1) values = unifiedIdToValues(suggestion, digits);
+  else values = guessCodeToValues(suggestion);
   for (let i = 0; i < L; i++) {
     const select = document.createElement('select');
     if (i >= sendCount) {
@@ -512,30 +477,19 @@ function renderResultButtons() {
     return;
   }
 
-  if (lengthMode === 'unified') {
-    // Achievable percentages depend on the mix of true lengths still alive
-    // among the actual remaining candidates, not a fixed formula.
-    const percents = new Set();
-    for (const id of candidateCodes) {
-      const m = matchCountValuesUnified(guessValues, digits, id);
-      percents.add(percentFor(m, trueLengthOf(id)));
-    }
-    for (const pct of Array.from(percents).sort((a, b) => a - b)) {
-      const btn = document.createElement('button');
-      btn.textContent = `${pct}%`;
-      btn.disabled = disabled;
-      btn.addEventListener('click', () => submitResult(pct));
-      resultButtons.appendChild(btn);
-    }
-  } else {
-    for (let k = 0; k <= filledCount; k++) {
-      const pct = percentFor(k, L);
-      const btn = document.createElement('button');
-      btn.textContent = `${k}/${L} correct (${pct}%)`;
-      btn.disabled = disabled;
-      btn.addEventListener('click', () => submitResult(pct));
-      resultButtons.appendChild(btn);
-    }
+  // Only offer results that are still possible: the achievable percentages
+  // depend on the lengths still alive among the actual remaining candidates.
+  const percents = new Set();
+  for (const id of candidateCodes) {
+    const m = matchCountValuesUnified(guessValues, digits, id);
+    percents.add(percentFor(m, trueLengthOf(id)));
+  }
+  for (const pct of Array.from(percents).sort((a, b) => a - b)) {
+    const btn = document.createElement('button');
+    btn.textContent = fixedLen ? `${Math.round((pct * fixedLen) / 100)}/${fixedLen} correct (${pct}%)` : `${pct}%`;
+    btn.disabled = disabled;
+    btn.addEventListener('click', () => submitResult(pct));
+    resultButtons.appendChild(btn);
   }
 }
 
@@ -572,7 +526,10 @@ function renderInventory() {
 }
 
 function renderCards() {
-  const used = history.reduce((sum, h) => sum + h.cardsUsed, 0);
+  // The answer's cards count as used as soon as it's known: the game still
+  // needs it sent, whether or not you tap "I sent it" here.
+  const used = history.reduce((sum, h) => sum + h.cardsUsed, 0)
+    + (solvedPendingSend() ? trueLengthOf(candidateCodes[0]) : 0);
 
   let predictedHtml = 'n/a';
   let worstHtml = 'n/a';
@@ -583,13 +540,8 @@ function renderCards() {
       worstHtml = 'calculating…';
     } else if (analysisState.status === 'done') {
       const suffix = analysisState.capped ? '+' : '';
-      if (analysisState.mode === 'unified') {
-        predictedHtml = `${used + Math.round(analysisState.expectedCards)}${suffix}`;
-        worstHtml = `${used + analysisState.worstCards}${suffix}`;
-      } else {
-        predictedHtml = `${used + Math.round(analysisState.expected * L)}${suffix}`;
-        worstHtml = `${used + analysisState.worstDepth * L}${suffix}`;
-      }
+      predictedHtml = `${used + Math.round(analysisState.expectedCards)}${suffix}`;
+      worstHtml = `${used + analysisState.worstCards}${suffix}`;
     }
   }
 
@@ -604,13 +556,11 @@ function renderBanner() {
   if (candidateCodes.length === 0) {
     bannerArea.innerHTML = `<div class="banner error">No combination matches all the results entered so far &mdash; one of the results was probably mis-entered. Use "Undo last" to fix it.</div>`;
   } else if (candidateCodes.length === 1 && suggestion !== null) {
-    const values = lengthMode === 'unified' ? unifiedIdToValues(suggestion, digits) : codeToValues(suggestion, L);
+    const values = unifiedIdToValues(suggestion, digits);
     const tail = answerSent() ? '' : ` Send it in the game (${values.length} cards), then tap "I sent it" below.`;
     bannerArea.innerHTML = `<div class="banner win">Solved! The combination is <strong>${values.join(', ')}</strong>.${tail}</div>`;
   } else if (outOfResources) {
     bannerArea.innerHTML = `<div class="banner error">You're out of numbers to send &mdash; no guess is possible. Use "Undo last" if that's wrong.</div>`;
-  } else if (fullGuessUnaffordable) {
-    bannerArea.innerHTML = `<div class="banner error">Not enough of any one combination left for a full ${L}-number guess. You can still send fewer &mdash; use the "Cards to send" buttons below and pick what you have left.</div>`;
   } else if (computeError) {
     bannerArea.innerHTML = '';
     const div = document.createElement('div');
@@ -654,7 +604,7 @@ buildInventorySetupGrid();
 buildInventoryAddGrid();
 document.getElementById('len-3-btn').addEventListener('click', () => startGame(3));
 document.getElementById('len-4-btn').addEventListener('click', () => startGame(4));
-document.getElementById('len-unknown-btn').addEventListener('click', () => startUnifiedGame());
+document.getElementById('len-unknown-btn').addEventListener('click', () => startGame(null));
 resetBtn.addEventListener('click', resetGame);
 undoBtn.addEventListener('click', undoLast);
 inventoryAddBtn.addEventListener('click', addToInventory);

@@ -13,115 +13,8 @@ function buildDigits(L) {
   return digits;
 }
 
-// Finds the guess (from guessCodes) that minimizes the worst-case number of
-// remaining candidates after the result comes back, Knuth-style minimax.
-// Ties broken by: smaller sum-of-squares (fewer expected remaining candidates),
-// then a guess that is itself still a possible secret, then more distinct
-// digits (purely cosmetic — under this position-only-match feedback, the
-// match-count distribution for a guess doesn't depend on which values it
-// uses, only distinct-value guesses just read more naturally to a person).
-function findBestGuess(candidateCodes, guessCodes, digits, L) {
-  const candSet = new Set(candidateCodes);
-  const counts = new Int32Array(L + 1);
-
-  let bestGuess = guessCodes[0];
-  let bestWorst = Infinity;
-  let bestSumSq = Infinity;
-  let bestIsCand = false;
-  let bestDistinct = -1;
-
-  for (let gi = 0; gi < guessCodes.length; gi++) {
-    const g = guessCodes[gi];
-    counts.fill(0);
-    const gBase = g * L;
-    for (let si = 0; si < candidateCodes.length; si++) {
-      const sBase = candidateCodes[si] * L;
-      let m = 0;
-      for (let p = 0; p < L; p++) if (digits[gBase + p] === digits[sBase + p]) m++;
-      counts[m]++;
-    }
-    let worst = 0, sumSq = 0;
-    for (let k = 0; k <= L; k++) { const c = counts[k]; if (c > worst) worst = c; sumSq += c * c; }
-    const isCand = candSet.has(g);
-
-    const seen = new Set();
-    for (let p = 0; p < L; p++) seen.add(digits[gBase + p]);
-    const distinct = seen.size;
-
-    const better =
-      worst < bestWorst ||
-      (worst === bestWorst && sumSq < bestSumSq) ||
-      (worst === bestWorst && sumSq === bestSumSq && isCand && !bestIsCand) ||
-      (worst === bestWorst && sumSq === bestSumSq && isCand === bestIsCand && distinct > bestDistinct);
-
-    if (better) {
-      bestWorst = worst; bestSumSq = sumSq; bestIsCand = isCand; bestDistinct = distinct; bestGuess = g;
-    }
-  }
-
-  return { bestGuess, worst: bestWorst, sumSq: bestSumSq };
-}
-
-function partitionByGuess(candidateCodes, guessCode, digits, L) {
-  const buckets = [];
-  for (let k = 0; k <= L; k++) buckets.push([]);
-  const gBase = guessCode * L;
-  for (const c of candidateCodes) {
-    const cBase = c * L;
-    let m = 0;
-    for (let p = 0; p < L; p++) if (digits[gBase + p] === digits[cBase + p]) m++;
-    buckets[m].push(c);
-  }
-  return buckets;
-}
-
-// Exact analysis of the full decision tree this greedy (locally-minimax)
-// strategy produces from here: at every node it picks the guess findBestGuess
-// would pick, branches into every non-empty outcome bucket (not just the
-// largest one), and recurses into ALL of them. `worstDepth` is the true
-// number of additional guesses needed in the worst case — since every
-// branch is explored, this is a real upper bound, and it can only decrease
-// (or hold) as real results come in, because the real outcome is always one
-// of the branches already accounted for here. `expected` is the exact
-// (probability-weighted) average number of additional guesses.
-// Cost is bounded rather than exponential: candidates only ever get
-// partitioned, never duplicated, so the total candidates handled at any
-// single depth across all branches together is capped at the size of the
-// original candidate set — the tree gets bushier as it gets deeper, but each
-// level does a roughly constant amount of total work.
-const DEPTH_CAP = 25;
-
-// Reaching a single remaining candidate isn't the end: the game still wants
-// that answer submitted, which costs one more full guess — unless the guess
-// that just got us here was itself the answer (a 100% result), in which case
-// it's already been sent.
-function analyzeTree(candidateCodes, guessCodes, digits, L, depth, isHit) {
-  if (candidateCodes.length <= 1) {
-    const finalGuess = isHit ? 0 : 1;
-    return { worstDepth: finalGuess, expected: finalGuess, capped: false };
-  }
-  if (depth >= DEPTH_CAP) return { worstDepth: 0, expected: 0, capped: true };
-
-  const { bestGuess } = findBestGuess(candidateCodes, guessCodes, digits, L);
-  const buckets = partitionByGuess(candidateCodes, bestGuess, digits, L);
-  const n = candidateCodes.length;
-
-  let worstDepth = 0;
-  let expected = 0;
-  let capped = false;
-  for (let k = 0; k < buckets.length; k++) {
-    const b = buckets[k];
-    if (b.length === 0) continue; // an outcome with zero candidates can't actually happen
-    const sub = analyzeTree(b, guessCodes, digits, L, depth + 1, k === L);
-    const branchDepth = 1 + sub.worstDepth;
-    if (branchDepth > worstDepth) worstDepth = branchDepth;
-    expected += (b.length / n) * (1 + sub.expected);
-    if (sub.capped) capped = true;
-  }
-  return { worstDepth, expected, capped };
-}
-
-// --- "Not sure (3 or 4)" mode ---
+// Every mode (3 numbers, 4 numbers, not sure) runs on this one engine; a
+// known length just means fewer candidates are alive.
 // Secrets are unified ids 0..10999 (0..999 = length-3, padded with NA_DIGIT
 // in slot 4; 1000..10999 = length-4). Guesses are base-11 codes over 4
 // slots (0 = not sent, 1-10 = a value) since guesses can be shorter than 4
@@ -171,7 +64,7 @@ function decodeGuessCode(code, gv) {
 
 function findBestGuessUnified(candidateIds, guessCodes, unifiedDigits) {
   let bestGuess = guessCodes[0];
-  let bestWorst = Infinity, bestSumSq = Infinity, bestCost = Infinity, bestDistinct = -1;
+  let bestWorst = Infinity, bestSumSq = Infinity, bestCost = Infinity, bestValueSum = Infinity;
   const counts = new Int32Array(101);
   const gv = new Int8Array(4);
 
@@ -195,17 +88,18 @@ function findBestGuessUnified(candidateIds, guessCodes, unifiedDigits) {
     let worst = 0, sumSq = 0;
     for (let pc = 0; pc <= 100; pc++) { const c = counts[pc]; if (c > worst) worst = c; sumSq += c * c; }
 
-    const seen = new Set();
-    for (let p = 0; p < 4; p++) if (gv[p] >= 0) seen.add(gv[p]);
-    const distinct = seen.size;
+    // Last tie-break: lower card values first (lower numbers are the ones you
+    // usually have more of). Only decides between otherwise-equal guesses.
+    let valueSum = 0;
+    for (let p = 0; p < 4; p++) if (gv[p] >= 0) valueSum += gv[p];
 
     const better =
       worst < bestWorst ||
       (worst === bestWorst && sumSq < bestSumSq) ||
       (worst === bestWorst && sumSq === bestSumSq && cost < bestCost) ||
-      (worst === bestWorst && sumSq === bestSumSq && cost === bestCost && distinct > bestDistinct);
+      (worst === bestWorst && sumSq === bestSumSq && cost === bestCost && valueSum < bestValueSum);
 
-    if (better) { bestWorst = worst; bestSumSq = sumSq; bestCost = cost; bestDistinct = distinct; bestGuess = g; }
+    if (better) { bestWorst = worst; bestSumSq = sumSq; bestCost = cost; bestValueSum = valueSum; bestGuess = g; }
   }
 
   return { bestGuess, worst: bestWorst, sumSq: bestSumSq };
@@ -269,28 +163,15 @@ function analyzeTreeUnified(candidateIds, guessCodes, unifiedDigits, depth) {
 }
 
 self.onmessage = (e) => {
-  const { type, mode, candidateCodes, guessCodes, L, requestId } = e.data;
-
-  if (mode === 'unified') {
-    const unifiedDigits = buildUnifiedDigits();
-    if (type === 'analysis') {
-      const { worstCards, expectedCards, capped } = analyzeTreeUnified(candidateCodes, guessCodes, unifiedDigits, 0);
-      self.postMessage({ type: 'analysis', requestId, worstCards, expectedCards, capped });
-      return;
-    }
-    const { bestGuess, worst, sumSq } = findBestGuessUnified(candidateCodes, guessCodes, unifiedDigits);
-    self.postMessage({ type: 'suggest', requestId, bestGuess, worst, sumSq });
-    return;
-  }
-
-  const digits = buildDigits(L);
+  const { type, candidateCodes, guessCodes, requestId } = e.data;
+  const unifiedDigits = buildUnifiedDigits();
 
   if (type === 'analysis') {
-    const { worstDepth, expected, capped } = analyzeTree(candidateCodes, guessCodes, digits, L, 0, false);
-    self.postMessage({ type: 'analysis', requestId, worstDepth, expected, capped });
+    const { worstCards, expectedCards, capped } = analyzeTreeUnified(candidateCodes, guessCodes, unifiedDigits, 0);
+    self.postMessage({ type: 'analysis', requestId, worstCards, expectedCards, capped });
     return;
   }
 
-  const { bestGuess, worst, sumSq } = findBestGuess(candidateCodes, guessCodes, digits, L);
+  const { bestGuess, worst, sumSq } = findBestGuessUnified(candidateCodes, guessCodes, unifiedDigits);
   self.postMessage({ type: 'suggest', requestId, bestGuess, worst, sumSq });
 };

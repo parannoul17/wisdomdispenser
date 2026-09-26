@@ -1,6 +1,5 @@
-// Shared logic between the main thread (app.js) and the solver worker.
-// A "code" is an integer 0..N-1 encoding a length-L combination whose digits
-// (each 0-9) represent values (1-10) at each position, most significant digit first.
+// Shared logic for the main thread (app.js). The solver worker keeps its own
+// copy of the search code since it can't import modules.
 
 export function comboCount(L) {
   return Math.pow(10, L);
@@ -20,50 +19,6 @@ export function buildDigits(L) {
   return digits;
 }
 
-export function valuesToCode(values) {
-  let code = 0;
-  for (const v of values) code = code * 10 + (v - 1);
-  return code;
-}
-
-export function codeToValues(code, L) {
-  const values = new Array(L);
-  let rem = code;
-  for (let p = L - 1; p >= 0; p--) {
-    values[p] = (rem % 10) + 1;
-    rem = Math.floor(rem / 10);
-  }
-  return values;
-}
-
-export function matchCount(digits, L, codeA, codeB) {
-  const baseA = codeA * L, baseB = codeB * L;
-  let m = 0;
-  for (let p = 0; p < L; p++) if (digits[baseA + p] === digits[baseB + p]) m++;
-  return m;
-}
-
-// Like matchCount, but the guess is a values array (1-10) that may contain
-// `null` for a position that wasn't sent at all — an unsent position never
-// counts as a match, no matter what the secret is there.
-export function matchCountValues(guessValues, digits, L, secretCode) {
-  const base = secretCode * L;
-  let m = 0;
-  for (let p = 0; p < L; p++) {
-    const gv = guessValues[p];
-    if (gv === null) continue;
-    if (gv - 1 === digits[base + p]) m++;
-  }
-  return m;
-}
-
-export function allCodes(L) {
-  const N = comboCount(L);
-  const arr = new Array(N);
-  for (let i = 0; i < N; i++) arr[i] = i;
-  return arr;
-}
-
 // Counts of each value 1-10 (index 0 = value 1) used in a values array.
 // Entries that are null/undefined (an unsent position) are skipped.
 export function digitCounts(values) {
@@ -72,30 +27,9 @@ export function digitCounts(values) {
   return counts;
 }
 
-// All codes of length L whose digit usage fits within `inventory`
-// (an array of 10 remaining counts, index 0 = value 1; Infinity = unlimited).
-export function feasibleCodes(inventory, L) {
-  const digits = buildDigits(L);
-  const N = comboCount(L);
-  const result = [];
-  const used = new Array(10);
-  for (let code = 0; code < N; code++) {
-    used.fill(0);
-    const base = code * L;
-    let ok = true;
-    for (let p = 0; p < L; p++) {
-      const v = digits[base + p];
-      used[v]++;
-      if (used[v] > inventory[v]) { ok = false; break; }
-    }
-    if (ok) result.push(code);
-  }
-  return result;
-}
-
-// --- "Not sure (3 or 4)" mode ---
-// The secret could be length 3 or length 4. Both possibilities are folded
-// into one unified candidate space over 4 slots: ids 0..999 are length-3
+// --- Candidate model (used by every mode) ---
+// The secret is length 3 or length 4 (a known length just restricts which
+// candidates are alive). Both lengths live in one unified candidate space over 4 slots: ids 0..999 are length-3
 // secrets (their 4th slot is NA_DIGIT — a value that can never match
 // anything, since a real guess digit is always 0-9), ids 1000..10999 are
 // length-4 secrets with all 4 slots real. Percentages are always relative
@@ -190,25 +124,15 @@ export function guessCodeToValues(code) {
   return values;
 }
 
-export function guessCardCost(code) {
-  let rem = code;
-  let cost = 0;
-  for (let p = 0; p < 4; p++) {
-    if (rem % 11 !== 0) cost++;
-    rem = Math.floor(rem / 11);
-  }
-  return cost;
-}
-
 // All PREFIX-shaped guess codes (cards 1..k filled, k+1..4 always blank, for
 // k=1..4 — never a gap in the middle or a suffix-only guess) whose digit
 // usage fits within `inventory`. This matches how partial guesses actually
 // work in the game: you can only hold back cards from the end.
-export function feasibleGuessCodes(inventory) {
+export function feasibleGuessCodes(inventory, maxCards = 4) {
   const result = [];
   const used = new Array(10);
   const values = new Array(4).fill(null);
-  for (let k = 1; k <= 4; k++) {
+  for (let k = 1; k <= maxCards; k++) {
     const total = Math.pow(10, k);
     for (let combo = 0; combo < total; combo++) {
       used.fill(0);
