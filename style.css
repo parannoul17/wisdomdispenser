@@ -326,6 +326,51 @@ th {
   margin-top: 10px;
 }
 
+.past-tries-box {
+  margin-top: 18px;
+}
+
+.past-tries-box summary {
+  cursor: pointer;
+  user-select: none;
+}
+
+.past-tries {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.past-try {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+.past-try .try-num {
+  color: var(--muted);
+  font-size: 0.85rem;
+  min-width: 18px;
+}
+
+.past-try select {
+  font: inherit;
+  padding: 8px 4px;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  background: var(--panel-2);
+  color: var(--text);
+}
+
+.past-try select:disabled {
+  opacity: 0.35;
+}
+
+.past-try .try-remove {
+  padding: 6px 10px;
+}
+
 .send-count-choices {
   display: flex;
   gap: 8px;

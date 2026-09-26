@@ -1,7 +1,7 @@
 import {
   digitCounts, buildUnifiedDigits, allUnifiedCandidates, trueLengthOf, unifiedIdToValues,
   matchCountValuesUnified, feasibleGuessCodes, guessCodeToValues, percentFor,
-} from './lib.js?v=8';
+} from './lib.js?v=10';
 
 const setupPanel = document.getElementById('setup-panel');
 const gamePanel = document.getElementById('game-panel');
@@ -23,6 +23,9 @@ const sendCountChoices = document.getElementById('send-count-choices');
 const sendCountHint = document.getElementById('send-count-hint');
 const guessLabel = document.getElementById('guess-label');
 const cardsDisplay = document.getElementById('cards-display');
+const pastTriesEl = document.getElementById('past-tries');
+const addPastTryBtn = document.getElementById('add-past-try-btn');
+const setupError = document.getElementById('setup-error');
 
 let L = null; // combination length: 3 or 4
 let digits = null;
@@ -56,7 +59,7 @@ function openingAnalysisCacheKey(len, inv) {
 
 function getWorker() {
   if (worker) return worker;
-  worker = new Worker('worker.js?v=8');
+  worker = new Worker('worker.js?v=10');
   worker.onerror = (err) => {
     console.error('Solver worker error:', err.message || err);
     clearTimeout(computeTimeoutId);
@@ -72,7 +75,7 @@ function getWorker() {
 
 function getAnalysisWorker() {
   if (analysisWorker) return analysisWorker;
-  analysisWorker = new Worker('worker.js?v=8');
+  analysisWorker = new Worker('worker.js?v=10');
   analysisWorker.onerror = (err) => {
     console.error('Analysis worker error:', err.message || err);
     clearTimeout(analysisTimeoutId);
@@ -179,13 +182,124 @@ function naturalSendCount(sug) {
   return Math.max(1, count);
 }
 
-// The secret is one of the candidates of the chosen length (3 or 4).
+const PAST_TRY_PERCENTS = [0, 25, 33, 50, 67, 75, 100];
+
+function renumberPastTries() {
+  pastTriesEl.querySelectorAll('.past-try').forEach((row, i) => {
+    row.querySelector('.try-num').textContent = `${i + 1}.`;
+  });
+}
+
+// One row of the "tries you already made" editor: how many cards were sent
+// (always the first k positions), their values, and the % the game gave back.
+function addPastTryRow() {
+  const row = document.createElement('div');
+  row.className = 'past-try';
+
+  const num = document.createElement('span');
+  num.className = 'try-num';
+  row.appendChild(num);
+
+  const cardsSel = document.createElement('select');
+  cardsSel.className = 'try-cards';
+  for (let k = 1; k <= 4; k++) {
+    const opt = document.createElement('option');
+    opt.value = String(k);
+    opt.textContent = k === 1 ? '1 card' : `${k} cards`;
+    if (k === 3) opt.selected = true;
+    cardsSel.appendChild(opt);
+  }
+  row.appendChild(cardsSel);
+
+  const valueSels = [];
+  for (let i = 0; i < 4; i++) {
+    const sel = document.createElement('select');
+    sel.className = 'try-value';
+    for (let v = 1; v <= 10; v++) {
+      const opt = document.createElement('option');
+      opt.value = String(v);
+      opt.textContent = String(v);
+      sel.appendChild(opt);
+    }
+    valueSels.push(sel);
+    row.appendChild(sel);
+  }
+  const syncDisabled = () => {
+    const k = parseInt(cardsSel.value, 10);
+    valueSels.forEach((sel, i) => { sel.disabled = i >= k; });
+  };
+  cardsSel.addEventListener('change', syncDisabled);
+  syncDisabled();
+
+  const pctSel = document.createElement('select');
+  pctSel.className = 'try-pct';
+  for (const p of PAST_TRY_PERCENTS) {
+    const opt = document.createElement('option');
+    opt.value = String(p);
+    opt.textContent = `${p}%`;
+    pctSel.appendChild(opt);
+  }
+  row.appendChild(pctSel);
+
+  const remove = document.createElement('button');
+  remove.className = 'try-remove';
+  remove.textContent = '×';
+  remove.title = 'Remove this try';
+  remove.addEventListener('click', () => { row.remove(); renumberPastTries(); });
+  row.appendChild(remove);
+
+  pastTriesEl.appendChild(row);
+  renumberPastTries();
+}
+
+function readPastTries() {
+  return Array.from(pastTriesEl.querySelectorAll('.past-try')).map((row) => {
+    const cards = parseInt(row.querySelector('.try-cards').value, 10);
+    const sels = row.querySelectorAll('.try-value');
+    const values = [null, null, null, null];
+    for (let i = 0; i < cards; i++) values[i] = parseInt(sels[i].value, 10);
+    return { cards, values, pct: parseInt(row.querySelector('.try-pct').value, 10) };
+  });
+}
+
+function showSetupError(msg) {
+  setupError.textContent = msg;
+  setupError.classList.remove('hidden');
+}
+
+// The secret is one of the candidates of the chosen length (3 or 4). Tries
+// made before using the tool are replayed first, narrowing the candidates
+// exactly as if they'd been entered live.
 function startGame(len) {
+  setupError.classList.add('hidden');
+  const inv = readInventoryInputs();
+  const tries = readPastTries();
+
+  let cands = allUnifiedCandidates().filter((id) => trueLengthOf(id) === len);
+  const unifiedDigits = buildUnifiedDigits();
+  const replayed = [];
+  for (let i = 0; i < tries.length; i++) {
+    const t = tries[i];
+    if (t.cards > len) {
+      showSetupError(`Try ${i + 1} sends ${t.cards} cards, but a ${len}-number combination only has ${len}.`);
+      return;
+    }
+    const after = cands.filter((id) => percentFor(matchCountValuesUnified(t.values, unifiedDigits, id), trueLengthOf(id)) === t.pct);
+    if (after.length === 0) {
+      showSetupError(i === 0
+        ? `Try 1 isn't possible in a ${len}-number game — check its numbers and %, or the length.`
+        : `Try ${i + 1} doesn't fit with the earlier tries — check its numbers or %, or whether this is really a ${len}-number game.`);
+      return;
+    }
+    replayed.push({ guessValues: t.values.slice(0, len), result: t.pct, before: cands, invBefore: inv, remainingAfter: after.length, cardsUsed: t.cards });
+    cands = after;
+  }
+
   L = len;
-  inventory = readInventoryInputs();
-  digits = buildUnifiedDigits();
-  candidateCodes = allUnifiedCandidates().filter((id) => trueLengthOf(id) === len);
-  history = [];
+  inventory = inv;
+  digits = unifiedDigits;
+  candidateCodes = cands;
+  history = replayed;
   suggestion = null;
   sendCount = L;
   outOfResources = false;
@@ -194,10 +308,12 @@ function startGame(len) {
   setupPanel.classList.add('hidden');
   gamePanel.classList.remove('hidden');
   renderAll();
-  requestSuggestion();
+  settleAfterUpdate();
 }
 
 function resetGame() {
+  pastTriesEl.innerHTML = ''; // don't carry last game's tries into the next one
+  setupError.classList.add('hidden');
   L = null;
   candidateCodes = [];
   history = [];
@@ -351,6 +467,12 @@ function submitResult(pct) {
   candidateCodes = after;
   inventory = newInventory;
 
+  settleAfterUpdate();
+}
+
+// After the candidates change (a new result, or a replayed session): show the
+// contradiction / solved state, or ask for the next suggestion.
+function settleAfterUpdate() {
   if (candidateCodes.length === 0) {
     suggestion = null;
     sendCount = 1;
@@ -601,3 +723,4 @@ document.getElementById('len-4-btn').addEventListener('click', () => startGame(4
 resetBtn.addEventListener('click', resetGame);
 undoBtn.addEventListener('click', undoLast);
 inventoryAddBtn.addEventListener('click', addToInventory);
+addPastTryBtn.addEventListener('click', addPastTryRow);

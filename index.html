@@ -12,15 +12,23 @@
   <p class="subtitle">Finds the guess that narrows down the secret combination fastest. Values 1&ndash;10, repeats allowed, feedback is % of digits in the exact right position.</p>
 
   <div id="setup-panel" class="panel">
-    <p class="section-label">Combination length</p>
+    <p class="section-label">Card inventory (optional)</p>
+    <p class="guess-hint" style="margin:0 0 10px">How many of each card you can send &mdash; e.g. ten 1s, three 2s. Leave a box blank for unlimited. If you already started, enter what you have <em>left now</em>.</p>
+    <div id="inventory-setup-grid" class="inventory-grid"></div>
+
+    <details class="past-tries-box">
+      <summary class="guess-hint">Already started this game? Add the tries you made</summary>
+      <p class="guess-hint" style="margin:10px 0">For each guess you sent, pick how many cards, the numbers, and the % the game gave back. They count toward cards used, but aren&rsquo;t taken out of your inventory again.</p>
+      <div id="past-tries" class="past-tries"></div>
+      <button id="add-past-try-btn" style="margin-top:8px">Add a try</button>
+    </details>
+
+    <p class="section-label" style="margin-top:22px">Start &mdash; how many numbers is the combination?</p>
     <div class="length-choices">
       <button id="len-3-btn" class="btn-primary">3 numbers</button>
       <button id="len-4-btn" class="btn-primary">4 numbers</button>
     </div>
-
-    <p class="section-label" style="margin-top:22px">Card inventory (optional)</p>
-    <p class="guess-hint" style="margin:0 0 10px">How many of each card you can send this session &mdash; e.g. ten 1s, three 2s. Leave a box blank for unlimited.</p>
-    <div id="inventory-setup-grid" class="inventory-grid"></div>
+    <p id="setup-error" class="field-error hidden"></p>
   </div>
 
   <div id="game-panel" class="hidden">
@@ -75,6 +83,6 @@
   </div>
 </div>
 
-<script type="module" src="app.js?v=8"></script>
+<script type="module" src="app.js?v=10"></script>
 </body>
 </html>
