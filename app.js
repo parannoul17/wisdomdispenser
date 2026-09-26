@@ -1,7 +1,7 @@
 import {
   digitCounts, buildUnifiedDigits, allUnifiedCandidates, trueLengthOf, unifiedIdToValues,
   matchCountValuesUnified, feasibleGuessCodes, guessCodeToValues, percentFor,
-} from './lib.js?v=7';
+} from './lib.js?v=8';
 
 const setupPanel = document.getElementById('setup-panel');
 const gamePanel = document.getElementById('game-panel');
@@ -24,8 +24,7 @@ const sendCountHint = document.getElementById('send-count-hint');
 const guessLabel = document.getElementById('guess-label');
 const cardsDisplay = document.getElementById('cards-display');
 
-let fixedLen = null; // 3 or 4 when the length is known, null for "not sure"
-let L = null; // number of card slots shown (4 when the length is unknown)
+let L = null; // combination length: 3 or 4
 let digits = null;
 let candidateCodes = [];
 let history = []; // { guessValues, result (a percent), before, invBefore, remainingAfter, cardsUsed }
@@ -52,13 +51,12 @@ const ANALYSIS_TIMEOUT_MS = 120000;
 const openingAnalysisCache = new Map();
 const openingSuggestionCache = new Map();
 function openingAnalysisCacheKey(len, inv) {
-  const prefix = len === null ? 'unknown' : String(len);
-  return prefix + '|' + inv.map((v) => (v === Infinity ? 'inf' : v)).join(',');
+  return len + '|' + inv.map((v) => (v === Infinity ? 'inf' : v)).join(',');
 }
 
 function getWorker() {
   if (worker) return worker;
-  worker = new Worker('worker.js?v=7');
+  worker = new Worker('worker.js?v=8');
   worker.onerror = (err) => {
     console.error('Solver worker error:', err.message || err);
     clearTimeout(computeTimeoutId);
@@ -74,7 +72,7 @@ function getWorker() {
 
 function getAnalysisWorker() {
   if (analysisWorker) return analysisWorker;
-  analysisWorker = new Worker('worker.js?v=7');
+  analysisWorker = new Worker('worker.js?v=8');
   analysisWorker.onerror = (err) => {
     console.error('Analysis worker error:', err.message || err);
     clearTimeout(analysisTimeoutId);
@@ -181,15 +179,12 @@ function naturalSendCount(sug) {
   return Math.max(1, count);
 }
 
-// Every mode runs on the same engine: the secret is one of the unified
-// candidates, and a known length (3 or 4) just restricts which ones are alive.
-// `len` is 3, 4, or null for "not sure".
+// The secret is one of the candidates of the chosen length (3 or 4).
 function startGame(len) {
-  fixedLen = len;
-  L = len === null ? 4 : len;
+  L = len;
   inventory = readInventoryInputs();
   digits = buildUnifiedDigits();
-  candidateCodes = len === null ? allUnifiedCandidates() : allUnifiedCandidates().filter((id) => trueLengthOf(id) === len);
+  candidateCodes = allUnifiedCandidates().filter((id) => trueLengthOf(id) === len);
   history = [];
   suggestion = null;
   sendCount = L;
@@ -203,7 +198,6 @@ function startGame(len) {
 }
 
 function resetGame() {
-  fixedLen = null;
   L = null;
   candidateCodes = [];
   history = [];
@@ -294,7 +288,7 @@ function requestSuggestion() {
   renderAll();
 
   const isOpeningMove = history.length === 0;
-  const cacheKey = isOpeningMove ? openingAnalysisCacheKey(fixedLen, inventory) : null;
+  const cacheKey = isOpeningMove ? openingAnalysisCacheKey(L, inventory) : null;
 
   if (cacheKey && openingSuggestionCache.has(cacheKey)) {
     suggestion = openingSuggestionCache.get(cacheKey);
@@ -486,7 +480,7 @@ function renderResultButtons() {
   }
   for (const pct of Array.from(percents).sort((a, b) => a - b)) {
     const btn = document.createElement('button');
-    btn.textContent = fixedLen ? `${Math.round((pct * fixedLen) / 100)}/${fixedLen} correct (${pct}%)` : `${pct}%`;
+    btn.textContent = `${Math.round((pct * L) / 100)}/${L} correct (${pct}%)`;
     btn.disabled = disabled;
     btn.addEventListener('click', () => submitResult(pct));
     resultButtons.appendChild(btn);
@@ -604,7 +598,6 @@ buildInventorySetupGrid();
 buildInventoryAddGrid();
 document.getElementById('len-3-btn').addEventListener('click', () => startGame(3));
 document.getElementById('len-4-btn').addEventListener('click', () => startGame(4));
-document.getElementById('len-unknown-btn').addEventListener('click', () => startGame(null));
 resetBtn.addEventListener('click', resetGame);
 undoBtn.addEventListener('click', undoLast);
 inventoryAddBtn.addEventListener('click', addToInventory);

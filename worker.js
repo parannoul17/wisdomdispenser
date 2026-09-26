@@ -13,8 +13,8 @@ function buildDigits(L) {
   return digits;
 }
 
-// Every mode (3 numbers, 4 numbers, not sure) runs on this one engine; a
-// known length just means fewer candidates are alive.
+// Both the 3- and 4-number games run on this one engine; the chosen length
+// just means only candidates of that length are alive.
 // Secrets are unified ids 0..10999 (0..999 = length-3, padded with NA_DIGIT
 // in slot 4; 1000..10999 = length-4). Guesses are base-11 codes over 4
 // slots (0 = not sent, 1-10 = a value) since guesses can be shorter than 4
