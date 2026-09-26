@@ -2,7 +2,7 @@ import {
   buildDigits, codeToValues, allCodes, digitCounts, feasibleCodes, matchCountValues,
   buildUnifiedDigits, allUnifiedCandidates, trueLengthOf, unifiedIdToValues,
   matchCountValuesUnified, feasibleGuessCodes, guessCodeToValues, percentFor,
-} from './lib.js?v=4';
+} from './lib.js?v=5';
 
 const setupPanel = document.getElementById('setup-panel');
 const gamePanel = document.getElementById('game-panel');
@@ -21,6 +21,8 @@ const inventoryDisplay = document.getElementById('inventory-display');
 const inventoryAddGrid = document.getElementById('inventory-add-grid');
 const inventoryAddBtn = document.getElementById('inventory-add-btn');
 const sendCountChoices = document.getElementById('send-count-choices');
+const sendCountHint = document.getElementById('send-count-hint');
+const guessLabel = document.getElementById('guess-label');
 const cardsDisplay = document.getElementById('cards-display');
 
 let lengthMode = 'fixed'; // 'fixed' | 'unified' (unified = "not sure, 3 or 4")
@@ -59,7 +61,7 @@ function openingAnalysisCacheKey(mode, len, inv) {
 
 function getWorker() {
   if (worker) return worker;
-  worker = new Worker('worker.js?v=4');
+  worker = new Worker('worker.js?v=5');
   worker.onerror = (err) => {
     console.error('Solver worker error:', err.message || err);
     clearTimeout(computeTimeoutId);
@@ -75,7 +77,7 @@ function getWorker() {
 
 function getAnalysisWorker() {
   if (analysisWorker) return analysisWorker;
-  analysisWorker = new Worker('worker.js?v=4');
+  analysisWorker = new Worker('worker.js?v=5');
   analysisWorker.onerror = (err) => {
     console.error('Analysis worker error:', err.message || err);
     clearTimeout(analysisTimeoutId);
@@ -155,12 +157,25 @@ function addToInventory() {
   }
 }
 
+// The winning guess has been sent (the last result was 100%).
+function answerSent() {
+  return history.length > 0 && history[history.length - 1].result === 100;
+}
+
+// Down to one candidate but the answer itself hasn't been sent yet — the game
+// still needs it, so it's offered as the final guess to log.
+function solvedPendingSend() {
+  return candidateCodes.length === 1 && !answerSent();
+}
+
 // Length of the guess's own leading run of real values — a suggestion is
 // always shaped as a prefix (fixed-mode guesses are always full-length;
 // unified-mode guesses are generated as prefixes only), so this is just
 // "how many cards did the suggestion itself use."
 function naturalSendCount(sug) {
   if (sug === null) return 1;
+  // One candidate left: the "guess" is the answer itself, sent at its full length.
+  if (candidateCodes.length === 1) return lengthMode === 'unified' ? trueLengthOf(sug) : L;
   const vals = lengthMode === 'unified' ? guessCodeToValues(sug) : codeToValues(sug, L);
   let count = 0;
   for (const v of vals) {
@@ -236,7 +251,7 @@ function updateProjectionsTerminal() {
   if (candidateCodes.length <= 1) {
     // The answer still has to be sent in the game — unless the last guess was
     // itself the winning one (100%), in which case it's already been paid for.
-    const alreadySent = candidateCodes.length === 0 || (history.length > 0 && history[history.length - 1].result === 100);
+    const alreadySent = candidateCodes.length === 0 || answerSent();
     if (lengthMode === 'unified') {
       const cards = alreadySent ? 0 : trueLengthOf(candidateCodes[0]);
       analysisState = { status: 'done', mode: 'unified', worstCards: cards, expectedCards: cards, capped: false };
@@ -442,9 +457,10 @@ function renderGuessInputs() {
   guessRow.innerHTML = '';
   // No suggestion (e.g. a full-length guess isn't affordable) means there's
   // no recommendation to show — default filler so the choice is deliberate.
-  const values = suggestion !== null
-    ? (lengthMode === 'unified' ? guessCodeToValues(suggestion) : codeToValues(suggestion, L))
-    : new Array(L).fill(null);
+  let values;
+  if (suggestion === null) values = new Array(L).fill(null);
+  else if (candidateCodes.length === 1) values = lengthMode === 'unified' ? unifiedIdToValues(suggestion, digits) : codeToValues(suggestion, L);
+  else values = lengthMode === 'unified' ? guessCodeToValues(suggestion) : codeToValues(suggestion, L);
   for (let i = 0; i < L; i++) {
     const select = document.createElement('select');
     if (i >= sendCount) {
@@ -484,6 +500,17 @@ function renderResultButtons() {
   if (filledCount === 0) return;
 
   const disabled = computing || candidateCodes.length === 0 || outOfResources || !!computeError;
+
+  if (solvedPendingSend()) {
+    // Only one outcome is possible: the answer is right.
+    const btn = document.createElement('button');
+    btn.textContent = 'I sent it (100%)';
+    btn.className = 'btn-primary';
+    btn.disabled = disabled;
+    btn.addEventListener('click', () => submitResult(100));
+    resultButtons.appendChild(btn);
+    return;
+  }
 
   if (lengthMode === 'unified') {
     // Achievable percentages depend on the mix of true lengths still alive
@@ -578,8 +605,7 @@ function renderBanner() {
     bannerArea.innerHTML = `<div class="banner error">No combination matches all the results entered so far &mdash; one of the results was probably mis-entered. Use "Undo last" to fix it.</div>`;
   } else if (candidateCodes.length === 1 && suggestion !== null) {
     const values = lengthMode === 'unified' ? unifiedIdToValues(suggestion, digits) : codeToValues(suggestion, L);
-    const sent = history.length > 0 && history[history.length - 1].result === 100;
-    const tail = sent ? '' : ` Send it in the game to finish (${values.length} cards).`;
+    const tail = answerSent() ? '' : ` Send it in the game (${values.length} cards), then tap "I sent it" below.`;
     bannerArea.innerHTML = `<div class="banner win">Solved! The combination is <strong>${values.join(', ')}</strong>.${tail}</div>`;
   } else if (outOfResources) {
     bannerArea.innerHTML = `<div class="banner error">You're out of numbers to send &mdash; no guess is possible. Use "Undo last" if that's wrong.</div>`;
@@ -615,9 +641,13 @@ function renderAll() {
 
   const guessRowPanel = guessRow.closest('.panel');
   const resultPanel = resultButtons.closest('.panel');
-  const hideGuessUi = candidateCodes.length <= 1 || outOfResources || !!computeError;
+  const pendingSend = solvedPendingSend();
+  const hideGuessUi = (candidateCodes.length <= 1 && !pendingSend) || outOfResources || !!computeError;
   guessRowPanel.classList.toggle('hidden', hideGuessUi);
   resultPanel.classList.toggle('hidden', hideGuessUi);
+  sendCountChoices.classList.toggle('hidden', pendingSend);
+  sendCountHint.classList.toggle('hidden', pendingSend);
+  guessLabel.textContent = pendingSend ? 'Final answer — send this to finish' : 'Suggested guess (edit if you tried something else)';
 }
 
 buildInventorySetupGrid();
