@@ -1,7 +1,7 @@
 import {
   digitCounts, buildUnifiedDigits, allUnifiedCandidates, trueLengthOf, unifiedIdToValues,
   matchCountValuesUnified, feasibleGuessCodes, guessCodeToValues, percentFor,
-} from './lib.js?v=10';
+} from './lib.js?v=11';
 
 const setupPanel = document.getElementById('setup-panel');
 const gamePanel = document.getElementById('game-panel');
@@ -26,6 +26,9 @@ const cardsDisplay = document.getElementById('cards-display');
 const pastTriesEl = document.getElementById('past-tries');
 const addPastTryBtn = document.getElementById('add-past-try-btn');
 const setupError = document.getElementById('setup-error');
+const odds3Btn = document.getElementById('odds-3-btn');
+const odds4Btn = document.getElementById('odds-4-btn');
+const oddsResultEl = document.getElementById('odds-result');
 
 let L = null; // combination length: 3 or 4
 let digits = null;
@@ -48,6 +51,20 @@ let analysisRequestId = 0;
 let analysisTimeoutId = null;
 const ANALYSIS_TIMEOUT_MS = 120000;
 
+// Odds check (setup screen only): chance of fully resolving a round with a
+// given inventory, computed by simulating this tool's own suggested guesses
+// across every possible secret of that length.
+let oddsWorker = null;
+let oddsRequestId = 0;
+let oddsTimeoutId = null;
+const ODDS_TIMEOUT_MS = 120000;
+const oddsCache = new Map();
+function oddsCacheKey(len, inv, tries) {
+  const invKey = inv.map((v) => (v === Infinity ? 'inf' : v)).join(',');
+  const triesKey = tries.map((t) => `${t.cards}:${t.values.join('.')}:${t.pct}`).join('|');
+  return `${len}|${invKey}|${triesKey}`;
+}
+
 // The opening move's analysis only depends on (length, inventory) — it's
 // the same search every time, so a fresh session with the same setup can
 // reuse a previous result instantly instead of re-running the full-tree search.
@@ -59,7 +76,7 @@ function openingAnalysisCacheKey(len, inv) {
 
 function getWorker() {
   if (worker) return worker;
-  worker = new Worker('worker.js?v=10');
+  worker = new Worker('worker.js?v=11');
   worker.onerror = (err) => {
     console.error('Solver worker error:', err.message || err);
     clearTimeout(computeTimeoutId);
@@ -75,7 +92,7 @@ function getWorker() {
 
 function getAnalysisWorker() {
   if (analysisWorker) return analysisWorker;
-  analysisWorker = new Worker('worker.js?v=10');
+  analysisWorker = new Worker('worker.js?v=11');
   analysisWorker.onerror = (err) => {
     console.error('Analysis worker error:', err.message || err);
     clearTimeout(analysisTimeoutId);
@@ -85,6 +102,19 @@ function getAnalysisWorker() {
     renderCards();
   };
   return analysisWorker;
+}
+
+function getOddsWorker() {
+  if (oddsWorker) return oddsWorker;
+  oddsWorker = new Worker('worker.js?v=11');
+  oddsWorker.onerror = (err) => {
+    console.error('Odds worker error:', err.message || err);
+    clearTimeout(oddsTimeoutId);
+    oddsWorker.terminate();
+    oddsWorker = null;
+    oddsResultEl.textContent = 'Something went wrong checking odds.';
+  };
+  return oddsWorker;
 }
 
 function buildInventorySetupGrid() {
@@ -267,6 +297,78 @@ function showSetupError(msg) {
   setupError.classList.remove('hidden');
 }
 
+// Replays the entered past tries against candidates of `len`, same
+// validation as startGame, without committing to a game. Returns the
+// narrowed candidates, or null (after showing the setup error) if a try
+// doesn't fit.
+function replayTriesFor(len, tries, unifiedDigits) {
+  let cands = allUnifiedCandidates().filter((id) => trueLengthOf(id) === len);
+  for (let i = 0; i < tries.length; i++) {
+    const t = tries[i];
+    if (t.cards > len) {
+      showSetupError(`Try ${i + 1} sends ${t.cards} cards, but a ${len}-number combination only has ${len}.`);
+      return null;
+    }
+    const after = cands.filter((id) => percentFor(matchCountValuesUnified(t.values, unifiedDigits, id), trueLengthOf(id)) === t.pct);
+    if (after.length === 0) {
+      showSetupError(i === 0
+        ? `Try 1 isn't possible in a ${len}-number game — check its numbers and %, or the length.`
+        : `Try ${i + 1} doesn't fit with the earlier tries — check its numbers or %, or whether this is really a ${len}-number game.`);
+      return null;
+    }
+    cands = after;
+  }
+  return cands;
+}
+
+function computeOddsForLength(len) {
+  setupError.classList.add('hidden');
+  const inv = readInventoryInputs();
+  const tries = readPastTries();
+  const unifiedDigits = buildUnifiedDigits();
+
+  const cands = replayTriesFor(len, tries, unifiedDigits);
+  if (cands === null) { oddsResultEl.textContent = ''; return; }
+
+  if (cands.length <= 1) {
+    oddsResultEl.textContent = `${len} numbers: your tries already narrow it to ${cands.length} combination${cands.length === 1 ? '' : 's'} — just send it.`;
+    return;
+  }
+
+  const cacheKey = oddsCacheKey(len, inv, tries);
+  if (oddsCache.has(cacheKey)) {
+    reportOddsResult(len, oddsCache.get(cacheKey));
+    return;
+  }
+
+  oddsResultEl.textContent = `Checking ${len}-number odds…`;
+  const myId = ++oddsRequestId;
+  const w = getOddsWorker();
+  w.onmessage = (e) => {
+    if (e.data.requestId !== myId) return;
+    clearTimeout(oddsTimeoutId);
+    const result = { solvable: e.data.solvable, total: e.data.total, capped: e.data.capped };
+    oddsCache.set(cacheKey, result);
+    reportOddsResult(len, result);
+  };
+  w.postMessage({ type: 'odds', requestId: myId, candidateCodes: cands, inventory: inv, L: len });
+
+  clearTimeout(oddsTimeoutId);
+  oddsTimeoutId = setTimeout(() => {
+    if (oddsRequestId !== myId) return;
+    console.error('Odds worker timed out');
+    w.terminate();
+    oddsWorker = null;
+    oddsResultEl.textContent = 'Odds check timed out — try again, or with a more limited inventory.';
+  }, ODDS_TIMEOUT_MS);
+}
+
+function reportOddsResult(len, { solvable, total, capped }) {
+  const pct = Math.round((solvable / total) * 100);
+  const cappedNote = capped ? ' (the search hit its depth limit — treat this as an estimate)' : '';
+  oddsResultEl.textContent = `${len} numbers: about ${pct}% chance to fully resolve with this inventory${cappedNote}.`;
+}
+
 // The secret is one of the candidates of the chosen length (3 or 4). Tries
 // made before using the tool are replayed first, narrowing the candidates
 // exactly as if they'd been entered live.
@@ -274,9 +376,9 @@ function startGame(len) {
   setupError.classList.add('hidden');
   const inv = readInventoryInputs();
   const tries = readPastTries();
+  const unifiedDigits = buildUnifiedDigits();
 
   let cands = allUnifiedCandidates().filter((id) => trueLengthOf(id) === len);
-  const unifiedDigits = buildUnifiedDigits();
   const replayed = [];
   for (let i = 0; i < tries.length; i++) {
     const t = tries[i];
@@ -314,6 +416,7 @@ function startGame(len) {
 function resetGame() {
   pastTriesEl.innerHTML = ''; // don't carry last game's tries into the next one
   setupError.classList.add('hidden');
+  oddsResultEl.textContent = '';
   L = null;
   candidateCodes = [];
   history = [];
@@ -724,3 +827,5 @@ resetBtn.addEventListener('click', resetGame);
 undoBtn.addEventListener('click', undoLast);
 inventoryAddBtn.addEventListener('click', addToInventory);
 addPastTryBtn.addEventListener('click', addPastTryRow);
+odds3Btn.addEventListener('click', () => computeOddsForLength(3));
+odds4Btn.addEventListener('click', () => computeOddsForLength(4));

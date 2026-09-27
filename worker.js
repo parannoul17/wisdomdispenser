@@ -130,6 +130,96 @@ function guessCardCost(code) {
   return decodeGuessCode(code, gv);
 }
 
+// Same base-11 guess encoding as lib.js, duplicated here since the worker
+// can't import modules.
+function valuesToGuessCodeW(values) {
+  let code = 0;
+  for (let p = 0; p < 4; p++) {
+    const v = values[p];
+    code = code * 11 + (v === null || v === undefined ? 0 : v);
+  }
+  return code;
+}
+
+// All PREFIX-shaped guess codes affordable within `inventory` (see lib.js's
+// feasibleGuessCodes — kept in sync, duplicated because the worker can't
+// import modules).
+function feasibleGuessCodesW(inventory, maxCards) {
+  const result = [];
+  const used = new Array(10);
+  const values = new Array(4).fill(null);
+  for (let k = 1; k <= maxCards; k++) {
+    const total = Math.pow(10, k);
+    for (let combo = 0; combo < total; combo++) {
+      used.fill(0);
+      let rem = combo;
+      let ok = true;
+      for (let p = k - 1; p >= 0; p--) {
+        const v = (rem % 10) + 1;
+        rem = Math.floor(rem / 10);
+        values[p] = v;
+        used[v - 1]++;
+        if (used[v - 1] > inventory[v - 1]) { ok = false; break; }
+      }
+      for (let p = k; p < 4; p++) values[p] = null;
+      if (ok) result.push(valuesToGuessCodeW(values));
+    }
+  }
+  return result;
+}
+
+// Whether the given candidate's own values (its true length) could actually
+// be submitted with what's left in `inventory` — the game still requires
+// sending the final answer, so if it uses a digit you've run dry on, you're
+// stuck even though the secret is known.
+function candidateAffordable(id, unifiedDigits, inventory) {
+  const len = id < UNIFIED_N3 ? 3 : 4;
+  const base = id * 4;
+  const used = new Int32Array(10);
+  for (let p = 0; p < len; p++) used[unifiedDigits[base + p]]++;
+  for (let v = 0; v < 10; v++) if (used[v] > inventory[v]) return false;
+  return true;
+}
+
+// Chance of fully resolving the round: plays the same guess this app would
+// suggest at every step (best guess among what's actually affordable), and
+// follows every branch of results, tracking cards actually spent along each
+// path. A candidate only counts as "solvable" if every guess along the way
+// was affordable AND the final answer itself is affordable at the end.
+function analyzeOddsUnified(candidateIds, inventory, unifiedDigits, L, depth) {
+  const n = candidateIds.length;
+  if (n === 0) return { solvable: 0, total: 0, capped: false };
+  if (n === 1) {
+    return { solvable: candidateAffordable(candidateIds[0], unifiedDigits, inventory) ? 1 : 0, total: 1, capped: false };
+  }
+  if (depth >= UNIFIED_DEPTH_CAP) return { solvable: 0, total: n, capped: true };
+
+  let unlimited = true;
+  for (let v = 0; v < 10; v++) if (inventory[v] !== Infinity) { unlimited = false; break; }
+  if (unlimited) return { solvable: n, total: n, capped: false };
+
+  const guessCodes = feasibleGuessCodesW(inventory, L);
+  if (guessCodes.length === 0) return { solvable: 0, total: n, capped: false };
+
+  const { bestGuess } = findBestGuessUnified(candidateIds, guessCodes, unifiedDigits);
+  const gv = new Int8Array(4);
+  decodeGuessCode(bestGuess, gv);
+  const nextInventory = inventory.slice();
+  for (let p = 0; p < 4; p++) if (gv[p] >= 0) nextInventory[gv[p]]--;
+
+  const buckets = partitionByGuessUnified(candidateIds, bestGuess, unifiedDigits);
+  let solvable = 0, capped = false;
+  for (let pct = 0; pct < buckets.length; pct++) {
+    const b = buckets[pct];
+    if (!b || b.length === 0) continue;
+    if (pct === 100) { solvable += b.length; continue; } // the guess itself was the answer
+    const sub = analyzeOddsUnified(b, nextInventory, unifiedDigits, L, depth + 1);
+    solvable += sub.solvable;
+    if (sub.capped) capped = true;
+  }
+  return { solvable, total: n, capped };
+}
+
 // Same idea as analyzeTree, but tracks actual CARDS spent along each path
 // (not guess count), since guess cost varies here.
 function analyzeTreeUnified(candidateIds, guessCodes, unifiedDigits, depth) {
@@ -163,12 +253,18 @@ function analyzeTreeUnified(candidateIds, guessCodes, unifiedDigits, depth) {
 }
 
 self.onmessage = (e) => {
-  const { type, candidateCodes, guessCodes, requestId } = e.data;
+  const { type, candidateCodes, guessCodes, requestId, inventory, L } = e.data;
   const unifiedDigits = buildUnifiedDigits();
 
   if (type === 'analysis') {
     const { worstCards, expectedCards, capped } = analyzeTreeUnified(candidateCodes, guessCodes, unifiedDigits, 0);
     self.postMessage({ type: 'analysis', requestId, worstCards, expectedCards, capped });
+    return;
+  }
+
+  if (type === 'odds') {
+    const { solvable, total, capped } = analyzeOddsUnified(candidateCodes, inventory, unifiedDigits, L, 0);
+    self.postMessage({ type: 'odds', requestId, solvable, total, capped });
     return;
   }
 
