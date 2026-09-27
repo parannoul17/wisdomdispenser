@@ -1,7 +1,7 @@
 import {
   digitCounts, buildUnifiedDigits, allUnifiedCandidates, trueLengthOf, unifiedIdToValues,
   matchCountValuesUnified, feasibleGuessCodes, guessCodeToValues, percentFor,
-} from './lib.js?v=11';
+} from './lib.js?v=13';
 
 const setupPanel = document.getElementById('setup-panel');
 const gamePanel = document.getElementById('game-panel');
@@ -76,7 +76,7 @@ function openingAnalysisCacheKey(len, inv) {
 
 function getWorker() {
   if (worker) return worker;
-  worker = new Worker('worker.js?v=11');
+  worker = new Worker('worker.js?v=13');
   worker.onerror = (err) => {
     console.error('Solver worker error:', err.message || err);
     clearTimeout(computeTimeoutId);
@@ -92,7 +92,7 @@ function getWorker() {
 
 function getAnalysisWorker() {
   if (analysisWorker) return analysisWorker;
-  analysisWorker = new Worker('worker.js?v=11');
+  analysisWorker = new Worker('worker.js?v=13');
   analysisWorker.onerror = (err) => {
     console.error('Analysis worker error:', err.message || err);
     clearTimeout(analysisTimeoutId);
@@ -106,7 +106,7 @@ function getAnalysisWorker() {
 
 function getOddsWorker() {
   if (oddsWorker) return oddsWorker;
-  oddsWorker = new Worker('worker.js?v=11');
+  oddsWorker = new Worker('worker.js?v=13');
   oddsWorker.onerror = (err) => {
     console.error('Odds worker error:', err.message || err);
     clearTimeout(oddsTimeoutId);
@@ -469,7 +469,7 @@ function requestAnalysis(candidatesForAnalysis, guessCodesForAnalysis, cacheKey 
     analysisState = { status: 'done', ...result };
     renderCards();
   };
-  aw.postMessage({ type: 'analysis', requestId: myId, candidateCodes: candidatesForAnalysis, guessCodes: guessCodesForAnalysis });
+  aw.postMessage({ type: 'analysis', requestId: myId, candidateCodes: candidatesForAnalysis, guessCodes: guessCodesForAnalysis, inventory });
 
   clearTimeout(analysisTimeoutId);
   analysisTimeoutId = setTimeout(() => {
@@ -528,7 +528,7 @@ function requestSuggestion() {
     renderAll();
     requestAnalysis(candidateCodes, guessCodes, cacheKey);
   };
-  w.postMessage({ type: 'suggest', candidateCodes, guessCodes });
+  w.postMessage({ type: 'suggest', candidateCodes, guessCodes, inventory });
 
   clearTimeout(computeTimeoutId);
   computeTimeoutId = setTimeout(() => {

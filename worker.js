@@ -62,11 +62,19 @@ function decodeGuessCode(code, gv) {
   return cost;
 }
 
-function findBestGuessUnified(candidateIds, guessCodes, unifiedDigits) {
+const SCARCITY_EPS = 1e-9;
+
+function findBestGuessUnified(candidateIds, guessCodes, unifiedDigits, inventory) {
   let bestGuess = guessCodes[0];
-  let bestWorst = Infinity, bestSumSq = Infinity, bestCost = Infinity, bestValueSum = Infinity;
+  let bestWorst = Infinity, bestSumSq = Infinity, bestCost = Infinity, bestScarcity = Infinity, bestValueSum = Infinity;
   const counts = new Int32Array(101);
   const gv = new Int8Array(4);
+  // Each card spent weighs 1/(how many of it you have): with 20 2s and 10 1s,
+  // a 2 weighs half as much as a 1. Unlimited cards weigh 0.
+  const weight = new Float64Array(10);
+  // Clamped: the projection can spend a card down to 0 or below, which must
+  // still weigh the most, not divide by zero or go negative.
+  if (inventory) for (let v = 0; v < 10; v++) weight[v] = 1 / Math.max(inventory[v], 0.5);
 
   for (let gi = 0; gi < guessCodes.length; gi++) {
     const g = guessCodes[gi];
@@ -88,18 +96,21 @@ function findBestGuessUnified(candidateIds, guessCodes, unifiedDigits) {
     let worst = 0, sumSq = 0;
     for (let pc = 0; pc <= 100; pc++) { const c = counts[pc]; if (c > worst) worst = c; sumSq += c * c; }
 
-    // Last tie-break: lower card values first (lower numbers are the ones you
-    // usually have more of). Only decides between otherwise-equal guesses.
-    let valueSum = 0;
-    for (let p = 0; p < 4; p++) if (gv[p] >= 0) valueSum += gv[p];
+    // Tie-breaks only (never overrides a better split): first spend the cards
+    // you have most of, then lower card values (with unlimited inventory every
+    // card weighs 0, so this falls straight through to lower values).
+    let scarcity = 0, valueSum = 0;
+    for (let p = 0; p < 4; p++) if (gv[p] >= 0) { scarcity += weight[gv[p]]; valueSum += gv[p]; }
 
+    const sameSplit = worst === bestWorst && sumSq === bestSumSq && cost === bestCost;
     const better =
       worst < bestWorst ||
       (worst === bestWorst && sumSq < bestSumSq) ||
       (worst === bestWorst && sumSq === bestSumSq && cost < bestCost) ||
-      (worst === bestWorst && sumSq === bestSumSq && cost === bestCost && valueSum < bestValueSum);
+      (sameSplit && scarcity < bestScarcity - SCARCITY_EPS) ||
+      (sameSplit && Math.abs(scarcity - bestScarcity) < SCARCITY_EPS && valueSum < bestValueSum);
 
-    if (better) { bestWorst = worst; bestSumSq = sumSq; bestCost = cost; bestValueSum = valueSum; bestGuess = g; }
+    if (better) { bestWorst = worst; bestSumSq = sumSq; bestCost = cost; bestScarcity = scarcity; bestValueSum = valueSum; bestGuess = g; }
   }
 
   return { bestGuess, worst: bestWorst, sumSq: bestSumSq };
@@ -201,7 +212,7 @@ function analyzeOddsUnified(candidateIds, inventory, unifiedDigits, L, depth) {
   const guessCodes = feasibleGuessCodesW(inventory, L);
   if (guessCodes.length === 0) return { solvable: 0, total: n, capped: false };
 
-  const { bestGuess } = findBestGuessUnified(candidateIds, guessCodes, unifiedDigits);
+  const { bestGuess } = findBestGuessUnified(candidateIds, guessCodes, unifiedDigits, inventory);
   const gv = new Int8Array(4);
   decodeGuessCode(bestGuess, gv);
   const nextInventory = inventory.slice();
@@ -222,7 +233,7 @@ function analyzeOddsUnified(candidateIds, inventory, unifiedDigits, L, depth) {
 
 // Same idea as analyzeTree, but tracks actual CARDS spent along each path
 // (not guess count), since guess cost varies here.
-function analyzeTreeUnified(candidateIds, guessCodes, unifiedDigits, depth) {
+function analyzeTreeUnified(candidateIds, guessCodes, unifiedDigits, depth, inventory) {
   if (candidateIds.length === 0) return { worstCards: 0, expectedCards: 0, capped: false };
   if (candidateIds.length === 1) {
     // Single answer left: sending it costs its true length in cards.
@@ -231,10 +242,18 @@ function analyzeTreeUnified(candidateIds, guessCodes, unifiedDigits, depth) {
   }
   if (depth >= UNIFIED_DEPTH_CAP) return { worstCards: 0, expectedCards: 0, capped: true };
 
-  const { bestGuess } = findBestGuessUnified(candidateIds, guessCodes, unifiedDigits);
+  const { bestGuess } = findBestGuessUnified(candidateIds, guessCodes, unifiedDigits, inventory);
   const cost = guessCardCost(bestGuess);
   const buckets = partitionByGuessUnified(candidateIds, bestGuess, unifiedDigits);
   const n = candidateIds.length;
+  // Spend the guess's cards so deeper tie-breaks see what's actually left.
+  let nextInventory = inventory;
+  if (inventory) {
+    const gv = new Int8Array(4);
+    decodeGuessCode(bestGuess, gv);
+    nextInventory = inventory.slice();
+    for (let p = 0; p < 4; p++) if (gv[p] >= 0) nextInventory[gv[p]]--;
+  }
 
   let worstCards = 0, expectedCards = 0, capped = false;
   for (let pct = 0; pct < buckets.length; pct++) {
@@ -243,7 +262,7 @@ function analyzeTreeUnified(candidateIds, guessCodes, unifiedDigits, depth) {
     // 100% means the game accepted it — that guess was the answer, already paid for.
     const sub = pct === 100
       ? { worstCards: 0, expectedCards: 0, capped: false }
-      : analyzeTreeUnified(b, guessCodes, unifiedDigits, depth + 1);
+      : analyzeTreeUnified(b, guessCodes, unifiedDigits, depth + 1, nextInventory);
     const branchCards = cost + sub.worstCards;
     if (branchCards > worstCards) worstCards = branchCards;
     expectedCards += (b.length / n) * (cost + sub.expectedCards);
@@ -257,7 +276,7 @@ self.onmessage = (e) => {
   const unifiedDigits = buildUnifiedDigits();
 
   if (type === 'analysis') {
-    const { worstCards, expectedCards, capped } = analyzeTreeUnified(candidateCodes, guessCodes, unifiedDigits, 0);
+    const { worstCards, expectedCards, capped } = analyzeTreeUnified(candidateCodes, guessCodes, unifiedDigits, 0, inventory);
     self.postMessage({ type: 'analysis', requestId, worstCards, expectedCards, capped });
     return;
   }
@@ -268,6 +287,6 @@ self.onmessage = (e) => {
     return;
   }
 
-  const { bestGuess, worst, sumSq } = findBestGuessUnified(candidateCodes, guessCodes, unifiedDigits);
+  const { bestGuess, worst, sumSq } = findBestGuessUnified(candidateCodes, guessCodes, unifiedDigits, inventory);
   self.postMessage({ type: 'suggest', requestId, bestGuess, worst, sumSq });
 };
