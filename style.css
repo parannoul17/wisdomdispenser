@@ -307,6 +307,12 @@ th {
   color: var(--danger);
 }
 
+.filler-note {
+  color: var(--accent);
+  font-size: 0.85rem;
+  margin: 8px 0 0;
+}
+
 .field-error {
   color: var(--danger);
   font-size: 0.85rem;

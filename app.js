@@ -1,7 +1,7 @@
 import {
   digitCounts, buildUnifiedDigits, allUnifiedCandidates, trueLengthOf, unifiedIdToValues,
   matchCountValuesUnified, feasibleGuessCodes, guessCodeToValues, percentFor,
-} from './lib.js?v=15';
+} from './lib.js?v=16';
 
 const setupPanel = document.getElementById('setup-panel');
 const gamePanel = document.getElementById('game-panel');
@@ -9,6 +9,7 @@ const remainingCountEl = document.getElementById('remaining-count');
 const guessRow = document.getElementById('guess-row');
 const guessError = document.getElementById('guess-error');
 const guessCost = document.getElementById('guess-cost');
+const guessFillerNote = document.getElementById('guess-filler-note');
 const spinnerRow = document.getElementById('spinner-row');
 const resultButtons = document.getElementById('result-buttons');
 const historyArea = document.getElementById('history-area');
@@ -83,7 +84,7 @@ function openingAnalysisCacheKey(len, inv) {
 
 function getWorker() {
   if (worker) return worker;
-  worker = new Worker('worker.js?v=15');
+  worker = new Worker('worker.js?v=16');
   worker.onerror = (err) => {
     console.error('Solver worker error:', err.message || err);
     clearTimeout(computeTimeoutId);
@@ -99,7 +100,7 @@ function getWorker() {
 
 function getAnalysisWorker() {
   if (analysisWorker) return analysisWorker;
-  analysisWorker = new Worker('worker.js?v=15');
+  analysisWorker = new Worker('worker.js?v=16');
   analysisWorker.onerror = (err) => {
     console.error('Analysis worker error:', err.message || err);
     clearTimeout(analysisTimeoutId);
@@ -113,7 +114,7 @@ function getAnalysisWorker() {
 
 function getOddsWorker() {
   if (oddsWorker) return oddsWorker;
-  oddsWorker = new Worker('worker.js?v=15');
+  oddsWorker = new Worker('worker.js?v=16');
   oddsWorker.onerror = (err) => {
     console.error('Odds worker error:', err.message || err);
     clearTimeout(oddsTimeoutId);
@@ -628,6 +629,36 @@ function readGuessInputs() {
 function onGuessChanged() {
   renderResultButtons();
   renderGuessCostPreview();
+  renderGuessFillerNote();
+}
+
+// Warns when a slot that's already the same value across every remaining
+// candidate (fully confirmed) is being sent as something else — that's not
+// gaining new information, it's only there because a full prefix must be
+// sent and the filler is cheaper than resending the confirmed value.
+function renderGuessFillerNote() {
+  if (candidateCodes.length <= 1) { guessFillerNote.classList.add('hidden'); return; }
+
+  const guessValues = readGuessInputs();
+  const mismatches = [];
+  for (let p = 0; p < L; p++) {
+    const sent = guessValues[p];
+    if (sent === null || sent === undefined) continue;
+    let lockedValue = null;
+    let locked = true;
+    for (const id of candidateCodes) {
+      const v = digits[id * 4 + p] + 1;
+      if (lockedValue === null) lockedValue = v;
+      else if (v !== lockedValue) { locked = false; break; }
+    }
+    if (locked && sent !== lockedValue) mismatches.push({ position: p + 1, locked: lockedValue, sent });
+  }
+
+  if (mismatches.length === 0) { guessFillerNote.classList.add('hidden'); return; }
+  const items = mismatches.map((m) => `slot ${m.position} is already known to be ${m.locked} (this sends ${m.sent} there instead)`);
+  const list = items.length === 1 ? items[0] : `${items.slice(0, -1).join(', ')}, and ${items[items.length - 1]}`;
+  guessFillerNote.textContent = `Heads up: ${list} — that's not new information, it's a cheaper filler so you don't spend a scarcer card confirming something you already know.`;
+  guessFillerNote.classList.remove('hidden');
 }
 
 function renderSendCountControl() {
@@ -833,6 +864,7 @@ function renderAll() {
   renderGuessInputs();
   renderResultButtons();
   renderGuessCostPreview();
+  renderGuessFillerNote();
   renderHistory();
   renderCards();
   renderCandidateList();
