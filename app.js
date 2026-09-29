@@ -1,7 +1,7 @@
 import {
   digitCounts, buildUnifiedDigits, allUnifiedCandidates, trueLengthOf, unifiedIdToValues,
   matchCountValuesUnified, feasibleGuessCodes, guessCodeToValues, percentFor,
-} from './lib.js?v=14';
+} from './lib.js?v=15';
 
 const setupPanel = document.getElementById('setup-panel');
 const gamePanel = document.getElementById('game-panel');
@@ -30,10 +30,12 @@ const odds3Btn = document.getElementById('odds-3-btn');
 const odds4Btn = document.getElementById('odds-4-btn');
 const oddsResultEl = document.getElementById('odds-result');
 const candidateListPanel = document.getElementById('candidate-list-panel');
+const candidateSummaryEl = document.getElementById('candidate-summary');
 const candidateListEl = document.getElementById('candidate-list');
 const candidateOddsEl = document.getElementById('candidate-odds');
 
-const CANDIDATE_LIST_MAX = 15;
+const CANDIDATE_LIST_MAX = 30;
+let candidateListWasVisible = false; // only force it closed the moment it (re)appears
 
 let L = null; // combination length: 3 or 4
 let digits = null;
@@ -81,7 +83,7 @@ function openingAnalysisCacheKey(len, inv) {
 
 function getWorker() {
   if (worker) return worker;
-  worker = new Worker('worker.js?v=14');
+  worker = new Worker('worker.js?v=15');
   worker.onerror = (err) => {
     console.error('Solver worker error:', err.message || err);
     clearTimeout(computeTimeoutId);
@@ -97,7 +99,7 @@ function getWorker() {
 
 function getAnalysisWorker() {
   if (analysisWorker) return analysisWorker;
-  analysisWorker = new Worker('worker.js?v=14');
+  analysisWorker = new Worker('worker.js?v=15');
   analysisWorker.onerror = (err) => {
     console.error('Analysis worker error:', err.message || err);
     clearTimeout(analysisTimeoutId);
@@ -111,7 +113,7 @@ function getAnalysisWorker() {
 
 function getOddsWorker() {
   if (oddsWorker) return oddsWorker;
-  oddsWorker = new Worker('worker.js?v=14');
+  oddsWorker = new Worker('worker.js?v=15');
   oddsWorker.onerror = (err) => {
     console.error('Odds worker error:', err.message || err);
     clearTimeout(oddsTimeoutId);
@@ -780,16 +782,22 @@ function renderCandidateList() {
   const n = candidateCodes.length;
   const show = n >= 2 && n <= CANDIDATE_LIST_MAX;
   candidateListPanel.classList.toggle('hidden', !show);
-  if (!show) return;
+  if (!show) { candidateListWasVisible = false; return; }
+  // Collapsed by default each time the panel (re)appears, but leave it alone
+  // (open or closed) across re-renders while it stays visible, so opening it
+  // doesn't get undone by the next guess/result.
+  if (!candidateListWasVisible) candidateListPanel.open = false;
+  candidateListWasVisible = true;
 
   const pct = 100 / n;
   const pctText = pct >= 10 ? Math.round(pct) : Math.round(pct * 10) / 10;
+  candidateSummaryEl.textContent = `Combinations still possible (${n})`;
   candidateOddsEl.textContent = `${n} combinations left — each about ${pctText}% likely, assuming the answer was picked at random.`;
 
   candidateListEl.innerHTML = candidateCodes.map((id) => {
     const values = unifiedIdToValues(id, digits);
-    const digitsHtml = values.map((v) => `<span class="digit">${v}</span>`).join('');
-    return `<span class="guess-pill">${digitsHtml}</span>`;
+    const digitsHtml = values.map((v) => `<span class="cand-digit">${v}</span>`).join('');
+    return `<span class="candidate-pill">${digitsHtml}</span>`;
   }).join('');
 }
 

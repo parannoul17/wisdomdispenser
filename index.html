@@ -52,11 +52,11 @@
       <div id="cards-display" class="cards-display"></div>
     </div>
 
-    <div id="candidate-list-panel" class="panel hidden">
-      <p class="section-label">Combinations still possible</p>
+    <details id="candidate-list-panel" class="panel hidden">
+      <summary id="candidate-summary" class="section-label" style="cursor:pointer">Combinations still possible</summary>
+      <p id="candidate-odds" class="guess-hint" style="margin:10px 0"></p>
       <div id="candidate-list" class="candidate-list"></div>
-      <p id="candidate-odds" class="guess-hint"></p>
-    </div>
+    </details>
 
     <div class="panel">
       <p class="section-label">Card inventory remaining</p>
@@ -97,6 +97,6 @@
   </div>
 </div>
 
-<script type="module" src="app.js?v=14"></script>
+<script type="module" src="app.js?v=15"></script>
 </body>
 </html>

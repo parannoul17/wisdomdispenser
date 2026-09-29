@@ -430,3 +430,19 @@ th {
   flex-wrap: wrap;
   gap: 8px;
 }
+
+.candidate-pill {
+  background: var(--panel-2);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 5px 9px;
+  font-weight: 700;
+  font-size: 0.9rem;
+  white-space: nowrap;
+}
+
+.candidate-pill .cand-digit:not(:first-child)::before {
+  content: ',';
+  color: var(--muted);
+  font-weight: 400;
+}
