@@ -424,3 +424,9 @@ th {
 .card-stat .value.used {
   color: var(--accent-2);
 }
+
+.candidate-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}

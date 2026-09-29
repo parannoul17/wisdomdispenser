@@ -1,7 +1,7 @@
 import {
   digitCounts, buildUnifiedDigits, allUnifiedCandidates, trueLengthOf, unifiedIdToValues,
   matchCountValuesUnified, feasibleGuessCodes, guessCodeToValues, percentFor,
-} from './lib.js?v=13';
+} from './lib.js?v=14';
 
 const setupPanel = document.getElementById('setup-panel');
 const gamePanel = document.getElementById('game-panel');
@@ -29,6 +29,11 @@ const setupError = document.getElementById('setup-error');
 const odds3Btn = document.getElementById('odds-3-btn');
 const odds4Btn = document.getElementById('odds-4-btn');
 const oddsResultEl = document.getElementById('odds-result');
+const candidateListPanel = document.getElementById('candidate-list-panel');
+const candidateListEl = document.getElementById('candidate-list');
+const candidateOddsEl = document.getElementById('candidate-odds');
+
+const CANDIDATE_LIST_MAX = 15;
 
 let L = null; // combination length: 3 or 4
 let digits = null;
@@ -76,7 +81,7 @@ function openingAnalysisCacheKey(len, inv) {
 
 function getWorker() {
   if (worker) return worker;
-  worker = new Worker('worker.js?v=13');
+  worker = new Worker('worker.js?v=14');
   worker.onerror = (err) => {
     console.error('Solver worker error:', err.message || err);
     clearTimeout(computeTimeoutId);
@@ -92,7 +97,7 @@ function getWorker() {
 
 function getAnalysisWorker() {
   if (analysisWorker) return analysisWorker;
-  analysisWorker = new Worker('worker.js?v=13');
+  analysisWorker = new Worker('worker.js?v=14');
   analysisWorker.onerror = (err) => {
     console.error('Analysis worker error:', err.message || err);
     clearTimeout(analysisTimeoutId);
@@ -106,7 +111,7 @@ function getAnalysisWorker() {
 
 function getOddsWorker() {
   if (oddsWorker) return oddsWorker;
-  oddsWorker = new Worker('worker.js?v=13');
+  oddsWorker = new Worker('worker.js?v=14');
   oddsWorker.onerror = (err) => {
     console.error('Odds worker error:', err.message || err);
     clearTimeout(oddsTimeoutId);
@@ -771,6 +776,23 @@ function renderCards() {
   `;
 }
 
+function renderCandidateList() {
+  const n = candidateCodes.length;
+  const show = n >= 2 && n <= CANDIDATE_LIST_MAX;
+  candidateListPanel.classList.toggle('hidden', !show);
+  if (!show) return;
+
+  const pct = 100 / n;
+  const pctText = pct >= 10 ? Math.round(pct) : Math.round(pct * 10) / 10;
+  candidateOddsEl.textContent = `${n} combinations left — each about ${pctText}% likely, assuming the answer was picked at random.`;
+
+  candidateListEl.innerHTML = candidateCodes.map((id) => {
+    const values = unifiedIdToValues(id, digits);
+    const digitsHtml = values.map((v) => `<span class="digit">${v}</span>`).join('');
+    return `<span class="guess-pill">${digitsHtml}</span>`;
+  }).join('');
+}
+
 function renderBanner() {
   if (candidateCodes.length === 0) {
     bannerArea.innerHTML = `<div class="banner error">No combination matches all the results entered so far &mdash; one of the results was probably mis-entered. Use "Undo last" to fix it.</div>`;
@@ -805,6 +827,7 @@ function renderAll() {
   renderGuessCostPreview();
   renderHistory();
   renderCards();
+  renderCandidateList();
   renderBanner();
   undoBtn.disabled = history.length === 0;
 
